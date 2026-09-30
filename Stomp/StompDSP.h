@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Common/SNCommon.h"
+#include "../Common/PitchDetector.h"
 
 /*  Stomp: педаль з плавним морфом схем, модуляція і плівкове ехо.
     Схеми — узагальнення характеру класичних типів педалей і підсилювачів (не копії конкретних виробів). */
@@ -441,12 +442,18 @@ private:
     juce::Random rng { 0xec40 };
 };
 //==============================================================================
-/** Октавер: три голоси (−1, −2, +1 октава), кожен — суміш двох двигунів:
-    Poly  — банк смугових комплексних фільтрів: у кожній смузі фаза ділиться на 2/4 (вниз) або множиться на 2 (вгору);
-            кожна нота акорду потрапляє у свою смугу, тому акорди тримаються, а звук когерентний і без гранулярного «дзижчання»;
-    Analog — стеження за нотою: синтезований суб, синхронізований з тригером (−1/−2),
-             і випрямлювач «октавія» для +1 (дзвінкий, найкраще перед фузом).
-    Bloom — октави наростають після кожної атаки; Wobble — резонансний фільтр на октавах, що «гуляє» з LFO. */
+/** Октавер: три голоси (−1, −2, +1 октава), кожен — суміш двох двигунів (Character):
+
+    Poly   — ERB-подібний банк комплексних смугових фільтрів; у кожній смузі фаза аналітичного сигналу
+             масштабується (×½, ×¼ — вниз; ×2 — вгору). Фази сусідніх смуг прив'язані до найближчого піку
+             спектра (phase locking), тож смуги однієї гармоніки складаються когерентно, а не гасять одна одну.
+             Тримає акорди. Низи суб-голосів підсилені: у гітари слабка основна частота, без цього суб «худий».
+    Analog — трекер YIN (знаходить основну навіть коли вона слабка) + вузький смуговий фільтр на ній →
+             тригери-дільники, синхронізовані осцилятори ½ і ¼. Суб = вхід × «майже меандр» (як у класичних
+             аналогових октаверах: зберігає тембр і атаку) + чистий синусоїдальний суб для маси.
+             +1: випрямлювач «октавія» (класичний дзвінкий октав-ап, найкраще перед фузом).
+
+    Bloom — октави наростають після атаки; Wobble — резонансний ФНЧ на октавах з LFO. */
 class Octaver
 {
 public:
@@ -455,32 +462,41 @@ public:
     void prepare (double sampleRate)
     {
         fs = sampleRate;
-        pre1.setLowPass (fs, 900.0, 0.707); pre2.setLowPass (fs, 900.0, 0.707);
+        pitch.prepare (fs, 35.0, 6000.0);
+        xlp1.setLowPass (fs, 1200.0, 0.707); xlp2.setLowPass (fs, 1200.0, 0.707);
         upBp1.setHighPass (fs, 90.0, 0.707); upBp2.setLowPass (fs, 2500.0, 0.707);
-        upDc.setHighPass (fs, 45.0, 0.707);
+        upDc.setHighPass (fs, 40.0, 0.707);
+        subLp1.setLowPass (fs, 160.0, 0.707); subLp2.setLowPass (fs, 160.0, 0.707);
         auto c = [this] (double ms) { return (float) std::exp (-1.0 / (0.001 * ms * fs)); };
-        eA = c (1.5); eR = c (60.0); fA = c (2.0); fR = c (15.0); sA = c (30.0); sR = c (150.0);
-        sm = c (20.0);
-        // Смуги 35 Гц…2 кГц, постійна добротність
+        eA = c (1.0); eR = c (50.0); fA = c (2.0); fR = c (15.0); sA = c (30.0); sR = c (150.0);
+        gA = c (3.0); gR = c (40.0); sm = c (20.0);
+        bpA = c (1.0); bpR = c (20.0);
+        holdSamples = (int) (0.08 * fs);
+
         for (int k = 0; k < kBands; ++k)
         {
-            const double fc = 35.0 * std::pow (2000.0 / 35.0, (double) k / (kBands - 1));
-            const double r = std::exp (-juce::MathConstants<double>::pi * 0.22 * fc / fs);
-            bands[(size_t) k].pr = (float) (r * std::cos (juce::MathConstants<double>::twoPi * fc / fs));
-            bands[(size_t) k].pi = (float) (r * std::sin (juce::MathConstants<double>::twoPi * fc / fs));
-            bands[(size_t) k].g = (float) (1.0 - r);
+            const double fc = 30.0 * std::pow (3000.0 / 30.0, (double) k / (kBands - 1));
+            const double r = std::exp (-juce::MathConstants<double>::pi * 0.2 * fc / fs);
+            auto& b = bands[(size_t) k];
+            b.pr = (float) (r * std::cos (juce::MathConstants<double>::twoPi * fc / fs));
+            b.pi = (float) (r * std::sin (juce::MathConstants<double>::twoPi * fc / fs));
+            b.g = (float) (1.0 - r);
+            b.wSub = (float) juce::jlimit (1.0, 2.2, std::sqrt (160.0 / fc));
         }
+        norm = {};
+        norm.fill (1.0f);
         reset();
-        calibrateBank();
+        calibrate();
         reset();
     }
 
     void reset()
     {
-        for (auto* f : { &pre1, &pre2, &track, &upBp1, &upBp2, &upDc, &toneLp }) f->reset();
-        env = envT = envF = envS = 0.0f; bloomEnv = 1.0f;
-        armed = false; ff1 = ff2 = false; since = 0; perEst = 0.0; candidate = 0.0;
-        ph1 = ph2 = 0.0; analogGate = 0.0f; trackHz = 900.0f; track.setLowPass (fs, trackHz, 0.6);
+        pitch.reset();
+        for (auto* f : { &xlp1, &xlp2, &upBp1, &upBp2, &upDc, &toneLp, &fb1, &fb2, &subLp1, &subLp2 }) f->reset();
+        envX = envR = envBp = envF = envS = 0.0f; bloomEnv = 1.0f;
+        armed = false; ff1 = ff2 = false; f0 = 0.0; valid = 0; analogGate = 0.0f;
+        ph0 = ph1 = ph2 = 0.0;
         g1 = g2 = gu = 0.0f; gd = 1.0f; fresh = true;
         for (auto& b : bands) b.clear();
         svfIc1 = svfIc2 = 0.0f; wobPhase = 0.0;
@@ -488,31 +504,27 @@ public:
 
     void setWobblePhase (double p) noexcept { wobPhase = p - std::floor (p); }
 
-    void process (float* const* data, int numCh, int n, const Settings& s)
+    /** subClean (може бути nullptr): низ октав (< 160 Гц) окремо — щоб у режимі Pre суб не зрізав вхідний фільтр драйву. */
+    void process (float* const* data, int numCh, int n, const Settings& s, float* subClean = nullptr)
     {
         const float c = juce::jlimit (0.0f, 1.0f, s.characterPct * 0.01f);
-        // Рівновага гучності між двигунами (cos/sin: без провалу посередині)
         const float polyW = std::cos (c * juce::MathConstants<float>::halfPi), anaW = std::sin (c * juce::MathConstants<float>::halfPi);
         const float t1 = s.sub1Pct * 0.01f, t2 = s.sub2Pct * 0.01f, tu = s.upPct * 0.01f, td = s.dryPct * 0.01f;
         const float bloomCoef = s.bloomMs > 1.0f ? (float) std::exp (-1.0 / (0.001 * s.bloomMs * fs)) : 0.0f;
         toneLp.setLowPass (fs, juce::jlimit (150.0, 0.45 * fs, (double) s.toneHz), 0.707);
         const float wob = s.wobblePct * 0.01f;
         const double wobInc = s.wobbleHz / fs;
-        const int minPer = (int) (fs / 1300.0), maxPer = (int) (fs / 30.0);
-        if (fresh) { g1 = t1; g2 = t2; gu = tu; gd = td; fresh = false; }   // після prepare — одразу цільові рівні
+        if (fresh) { g1 = t1; g2 = t2; gu = tu; gd = td; fresh = false; }
 
         for (int i = 0; i < n; ++i)
         {
             float x = data[0][i];
             if (numCh > 1) x = 0.5f * (x + data[1][i]);
 
-            // Згладжені рівні
             g1 = t1 + sm * (g1 - t1); g2 = t2 + sm * (g2 - t2); gu = tu + sm * (gu - tu); gd = td + sm * (gd - td);
 
+            // --- Bloom
             const float ax = std::abs (x);
-            env = ax > env ? ax + eA * (env - ax) : ax + eR * (env - ax);
-
-            // --- Bloom: детектор атаки
             const float prevS = envS;
             envF = ax > envF ? ax + fA * (envF - ax) : ax + fR * (envF - ax);
             envS = ax > envS ? ax + sA * (envS - ax) : ax + sR * (envS - ax);
@@ -523,54 +535,25 @@ public:
             }
             else bloomEnv = 1.0f;
 
-            // --- Трекер: фільтр, що йде за нотою, + тригер з гістерезисом
-            const float tr = track.process (pre2.process (pre1.process (x)));
-            const float atr = std::abs (tr);
-            envT = atr > envT ? atr + eA * (envT - atr) : atr + eR * (envT - atr);
-            const float thr = 0.2f * envT + 1.0e-5f;
-            ++since;
-            if (tr < -thr) armed = true;
-            if (armed && tr > thr)
-            {
-                armed = false;
-                onCrossing (since, minPer, maxPer);
-                since = 0;
-            }
-            const bool tracking = perEst > 0.0 && since < maxPer && env > 0.0015f;
-            const float gateT = tracking ? 1.0f : 0.0f;
-            analogGate = gateT + (tracking ? 0.995f : 0.999f) * (analogGate - gateT);
+            float p1, p2, pu, a1, a2, au;
+            voices (x, p1, p2, pu, a1, a2, au);
 
-            if (perEst > 0.0)
-            {
-                ph1 += 1.0 / (2.0 * perEst); ph1 -= std::floor (ph1);
-                ph2 += 1.0 / (4.0 * perEst); ph2 -= std::floor (ph2);
-            }
-            auto voice = [] (double ph) { return std::tanh (1.8f * (float) std::sin (juce::MathConstants<double>::twoPi * ph)) / 0.9468f; };
-            const float amp = env * 0.8f * analogGate;
-            const float a1 = voice (ph1) * amp, a2 = voice (ph2) * amp;
-            // Октава вгору «октавія»: випрямлення смуги гітари
-            const float bp = upBp2.process (upBp1.process (x));
-            const float au = upDc.process (std::abs (bp)) * 2.2f;
-
-            // --- Poly: банк фільтрів з діленням фази
-            float p1 = 0.0f, p2 = 0.0f, pu = 0.0f;
-            bankProcess (x, p1, p2, pu);
-
-            float oct = g1 * (polyW * p1 + anaW * a1) + g2 * (polyW * p2 + anaW * a2) + gu * (polyW * pu + anaW * au);
+            float oct = g1 * (polyW * p1 * norm[0] + anaW * a1 * norm[3])
+                      + g2 * (polyW * p2 * norm[1] + anaW * a2 * norm[4])
+                      + gu * (polyW * pu * norm[2] + anaW * au * norm[5]);
             oct = toneLp.process (oct);
 
-            // --- Wobble: резонансний ФНЧ (TPT SVF), частота «гуляє» з LFO
             if (wob > 0.001f)
             {
                 wobPhase += wobInc; if (wobPhase >= 1.0) wobPhase -= 1.0;
                 if ((i & 15) == 0)
                 {
                     const float lfo = 0.5f - 0.5f * (float) std::cos (juce::MathConstants<double>::twoPi * wobPhase);
-                    // Верх — Tone (не вище 3 кГц, там октавам нічого робити), низ — до 60 Гц (глибина = Wobble)
+                    // Верх — Tone (не вище 3 кГц), низ — до 60 Гц (глибина = Wobble)
                     const float top = std::min (s.toneHz, 3000.0f);
                     const float fc = juce::jlimit (50.0f, (float) (0.4 * fs), top * std::pow (std::min (1.0f, 60.0f / top), wob * (1.0f - lfo)));
                     svfG = (float) std::tan (juce::MathConstants<double>::pi * fc / fs);
-                    const float q = 0.7f + 1.8f * wob;              // помірний резонанс: «вау», а не свист
+                    const float q = 0.7f + 1.8f * wob;
                     svfK = 1.0f / q;
                     svfComp = 1.0f / (1.0f + 0.35f * (q - 0.7f));
                 }
@@ -582,123 +565,202 @@ public:
             }
 
             oct *= bloomEnv;
+            if (subClean != nullptr) subClean[i] = subLp2.process (subLp1.process (oct));
             for (int ch = 0; ch < numCh; ++ch)
                 data[ch][i] = gd * data[ch][i] + oct;
         }
     }
 
-    float getTrackedHz() const noexcept { return perEst > 0.0 && analogGate > 0.5f ? (float) (fs / perEst) : 0.0f; }
-    float getBloom() const noexcept { return bloomEnv; }
-    /** Октави повністю згасли, сухий = 100 % — можна не рахувати. */
+    float getTrackedHz() const noexcept { return analogGate > 0.5f ? (float) f0 : 0.0f; }
     bool isIdle() const noexcept { return g1 < 1.0e-4f && g2 < 1.0e-4f && gu < 1.0e-4f && gd > 0.9999f; }
 
 private:
+    //--------------------------------------------------------------------------
+    /** Усі шість голосів (до нормування) для одного семпла. */
+    void voices (float x, float& p1, float& p2, float& pu, float& a1, float& a2, float& au) noexcept
+    {
+        // --- Analog: трекер
+        if (pitch.push (x))
+        {
+            if (pitch.hz > 0.0f && pitch.clarity > 0.7f) { onPitch (pitch.hz); valid = holdSamples; }
+        }
+        if (valid > 0) --valid;
+
+        const float xl = xlp2.process (xlp1.process (x));
+        const float axl = std::abs (xl);
+        envX = axl > envX ? axl + eA * (envX - axl) : axl + eR * (envX - axl);
+        const bool tracking = valid > 0 && f0 > 0.0 && envX > 3.0e-4f;
+        const float gt = tracking ? 1.0f : 0.0f;
+        analogGate = gt + (tracking ? gA : gR) * (analogGate - gt);
+
+        if (f0 > 0.0)
+        {
+            // Смуговий фільтр на основній: чисті тригери навіть коли основна слабка
+            const float bp = fb2.process (fb1.process (xl));
+            const float abp = std::abs (bp);
+            envBp = abp > envBp ? abp + bpA * (envBp - abp) : abp + bpR * (envBp - abp);
+            const float thr = 0.3f * envBp + 1.0e-7f;
+            if (bp < -thr) armed = true;
+            if (armed && bp > thr)
+            {
+                armed = false;
+                ph0 += 0.5 * wrapHalf (-ph0);
+                ff1 = ! ff1;
+                if (ff1)
+                {
+                    ph1 += 0.5 * wrapHalf (-ph1);
+                    ff2 = ! ff2;
+                    if (ff2) ph2 += 0.5 * wrapHalf (-ph2);
+                }
+            }
+            const double inc = f0 / fs;
+            ph0 += inc;        ph0 -= std::floor (ph0);
+            ph1 += 0.5 * inc;  ph1 -= std::floor (ph1);
+            ph2 += 0.25 * inc; ph2 -= std::floor (ph2);
+        }
+        const float s1 = sinTurn (ph1), s2 = sinTurn (ph2);
+        a1 = analogGate * (xl * sq (s1) + 0.7f * envX * s1);
+        a2 = analogGate * (xl * sq (s2) + 0.7f * envX * s2);
+        // «Октавія»: випрямлення; рівень приведено до огинаючої входу (не залежить від форми хвилі)
+        const float rect = upDc.process (std::abs (upBp2.process (upBp1.process (x))));
+        const float ar = std::abs (rect);
+        envR = ar > envR ? ar + eA * (envR - ar) : ar + eR * (envR - ar);
+        au = rect * envX / (envR + 1.0e-6f);
+
+        // --- Poly
+        bank (x, p1, p2, pu);
+    }
+
+    static float sinTurn (double ph) noexcept { return (float) std::sin (juce::MathConstants<double>::twoPi * ph); }
+    static float sq (float s) noexcept { return std::tanh (4.0f * s) * 1.00067f; }          // «майже меандр» без різких фронтів
+    static double wrapHalf (double v) noexcept { return v - std::round (v); }
+
+    void onPitch (float hz)
+    {
+        if (f0 <= 0.0 || std::abs (std::log2 (hz / f0)) > 0.04) f0 = hz;   // нова нота — одразу
+        else f0 = 0.7 * f0 + 0.3 * hz;                                      // та сама — згладжено (вібрато, бенди)
+        if (std::abs (f0 - bpHz) > 0.01 * bpHz)
+        {
+            bpHz = f0;
+            fb1.setBandPass (fs, f0, 1.2); fb2.setBandPass (fs, f0, 1.2);
+        }
+    }
+
+    //--------------------------------------------------------------------------
     struct Band
     {
-        float pr = 0, pi = 0, g = 0;                   // полюс r·e^{jω} і вхідне підсилення
-        float ar = 0, ai = 0, br = 0, bi = 0;          // два каскади комплексного резонатора
-        float qr = 1, qi = 0;                          // попередній напрям фазора
-        float h1r = 1, h1i = 0, h2r = 1, h2i = 0;      // фазори з поділеною фазою (½ і ¼)
+        float pr = 0, pi = 0, g = 0, wSub = 1;
+        float ar = 0, ai = 0, br = 0, bi = 0;
+        float qr = 1, qi = 0;
+        float h1r = 1, h1i = 0, h2r = 1, h2i = 0;
         void clear() { ar = ai = br = bi = 0; qr = 1; qi = 0; h1r = 1; h1i = 0; h2r = 1; h2i = 0; }
     };
-    static constexpr int kBands = 28;
+    static constexpr int kBands = 40;
 
-    /** Корінь з одиничного комплексного числа (половина кута, головна гілка). */
     static inline void halfAngle (float c, float s, float& hc, float& hs) noexcept
     {
         hc = std::sqrt (std::max (0.0f, 0.5f * (1.0f + c)));
         hs = std::copysign (std::sqrt (std::max (0.0f, 0.5f * (1.0f - c))), s);
     }
 
-    void bankProcess (float x, float& sub1Out, float& sub2Out, float& upOut) noexcept
+    static inline void rotate (float& r, float& i, float c, float s) noexcept
     {
-        for (auto& b : bands)
+        const float t = r * c - i * s; i = r * s + i * c; r = t;
+    }
+
+    void bank (float x, float& sub1Out, float& sub2Out, float& upOut) noexcept
+    {
+        sub1Out = sub2Out = upOut = 0.0f;
+        std::array<float, kBands> mag, ur, ui;
+        for (int k = 0; k < kBands; ++k)
         {
-            // Два каскади комплексного однополюсника: аналітичний сигнал смуги
+            auto& b = bands[(size_t) k];
             float nr = b.g * x + b.pr * b.ar - b.pi * b.ai;
             float ni = b.pr * b.ai + b.pi * b.ar;
             b.ar = nr; b.ai = ni;
             nr = b.g * b.ar + b.pr * b.br - b.pi * b.bi;
             ni = b.g * b.ai + b.pr * b.bi + b.pi * b.br;
             b.br = nr; b.bi = ni;
-
-            const float mag = std::sqrt (b.br * b.br + b.bi * b.bi);
-            if (mag < 1.0e-9f) continue;
-            const float ur = b.br / mag, ui = b.bi / mag;
-            // Приріст фази за семпл: u · conj(q)
-            const float dr = ur * b.qr + ui * b.qi, di = ui * b.qr - ur * b.qi;
-            b.qr = ur; b.qi = ui;
+            const float m = std::sqrt (b.br * b.br + b.bi * b.bi);
+            mag[(size_t) k] = m;
+            if (m < 1.0e-12f) { ur[(size_t) k] = b.qr; ui[(size_t) k] = b.qi; continue; }
+            ur[(size_t) k] = b.br / m; ui[(size_t) k] = b.bi / m;
+            // Власне накопичення фази (для піків)
+            const float dr = ur[(size_t) k] * b.qr + ui[(size_t) k] * b.qi, di = ui[(size_t) k] * b.qr - ur[(size_t) k] * b.qi;
+            b.qr = ur[(size_t) k]; b.qi = ui[(size_t) k];
             float c1, s1, c2, s2;
             halfAngle (dr, di, c1, s1);
             halfAngle (c1, s1, c2, s2);
-            float t = b.h1r * c1 - b.h1i * s1; b.h1i = b.h1r * s1 + b.h1i * c1; b.h1r = t;
-            t = b.h2r * c2 - b.h2i * s2;        b.h2i = b.h2r * s2 + b.h2i * c2; b.h2r = t;
-            // Ренормалізація (похибка округлення)
+            rotate (b.h1r, b.h1i, c1, s1);
+            rotate (b.h2r, b.h2i, c2, s2);
             const float n1 = 1.5f - 0.5f * (b.h1r * b.h1r + b.h1i * b.h1i), n2 = 1.5f - 0.5f * (b.h2r * b.h2r + b.h2i * b.h2i);
             b.h1r *= n1; b.h1i *= n1; b.h2r *= n2; b.h2i *= n2;
-
-            sub1Out += mag * b.h1r;
-            sub2Out += mag * b.h2r;
-            upOut   += mag * (ur * ur - ui * ui);          // cos 2φ
         }
-        sub1Out *= norm1; sub2Out *= norm2; upOut *= normUp;
+
+        // Прив'язка фаз до піку: смуга бере фазу свого піку + половину (чверть) різниці фаз з ним
+        for (int k = 0; k < kBands; ++k)
+        {
+            int p = k;
+            for (;;)
+            {
+                if (p + 1 < kBands && mag[(size_t) p + 1] > mag[(size_t) p]) ++p;
+                else if (p > 0 && mag[(size_t) p - 1] > mag[(size_t) p]) --p;
+                else break;
+            }
+            auto& b = bands[(size_t) k];
+            if (p != k)
+            {
+                const auto& pk = bands[(size_t) p];
+                const float rr = ur[(size_t) k] * ur[(size_t) p] + ui[(size_t) k] * ui[(size_t) p];
+                const float ri = ui[(size_t) k] * ur[(size_t) p] - ur[(size_t) k] * ui[(size_t) p];
+                float c1, s1, c2, s2;
+                halfAngle (rr, ri, c1, s1);
+                halfAngle (c1, s1, c2, s2);
+                b.h1r = pk.h1r; b.h1i = pk.h1i; rotate (b.h1r, b.h1i, c1, s1);
+                b.h2r = pk.h2r; b.h2i = pk.h2i; rotate (b.h2r, b.h2i, c2, s2);
+            }
+            const float m = mag[(size_t) k];
+            sub1Out += m * b.wSub * b.h1r;
+            sub2Out += m * b.wSub * b.h2r;
+            upOut   += m * (ur[(size_t) k] * ur[(size_t) k] - ui[(size_t) k] * ui[(size_t) k]);
+        }
     }
 
-    /** Нормування: кожен голос на синусі дає ту ж гучність, що й вхід. */
-    void calibrateBank()
+    /** Нормування на гітароподібних тонах: кожен голос на 100 % звучить так само голосно, як вхід. */
+    void calibrate()
     {
-        norm1 = norm2 = normUp = 1.0f;
-        double inE = 0.0, e1 = 0.0, e2 = 0.0, eu = 0.0;
-        for (double f : { 82.4, 110.0, 196.0, 330.0, 523.0 })
+        std::array<double, 6> e {};
+        double inE = 0.0;
+        for (double f : { 82.4, 110.0, 196.0 })
         {
-            for (auto& b : bands) b.clear();
-            const int n = (int) (0.4 * fs);
+            reset();
+            const int n = (int) (0.6 * fs);
             for (int i = 0; i < n; ++i)
             {
-                const float x = (float) std::sin (juce::MathConstants<double>::twoPi * f * i / fs);
-                float a = 0, c = 0, u = 0;
-                bankProcess (x, a, c, u);
-                if (i > n / 2) { inE += (double) x * x; e1 += (double) a * a; e2 += (double) c * c; eu += (double) u * u; }
+                float x = 0.0f;
+                for (int h = 1; h <= 10; ++h) x += 0.3f / (float) h * (float) std::sin (juce::MathConstants<double>::twoPi * f * h * i / fs);
+                float v[6];
+                voices (x, v[0], v[1], v[2], v[3], v[4], v[5]);
+                if (i > n / 2)
+                {
+                    inE += (double) x * x;
+                    for (int k = 0; k < 6; ++k) e[(size_t) k] += (double) v[k] * v[k];
+                }
             }
         }
-        auto nrm = [inE] (double e) { return e > 0.0 ? (float) std::sqrt (inE / e) : 1.0f; };
-        norm1 = nrm (e1); norm2 = nrm (e2); normUp = nrm (eu);
+        for (size_t k = 0; k < 6; ++k) norm[k] = e[k] > 0.0 ? (float) std::sqrt (inE / e[k]) : 1.0f;
     }
-
-    void onCrossing (int per, int minPer, int maxPer)
-    {
-        if (per < minPer || per > maxPer) return;
-        const double p = (double) per;
-        bool accept = perEst <= 0.0 || (p > 0.7 * perEst && p < 1.43 * perEst);
-        if (! accept && candidate > 0.0 && p > 0.85 * candidate && p < 1.18 * candidate) { perEst = 0.0; accept = true; }   // нова нота підтверджена
-        if (! accept) { candidate = p; return; }
-        candidate = 0.0;
-        perEst = perEst <= 0.0 ? p : 0.6 * perEst + 0.4 * p;
-        // Трекінговий фільтр: трохи вище основного тону, щоб гармоніки не збивали тригер
-        const float hz = juce::jlimit (60.0f, 900.0f, (float) (fs / perEst) * 1.6f);
-        if (std::abs (hz - trackHz) > 0.05f * trackHz) { trackHz = hz; track.setLowPass (fs, hz, 0.6); }
-
-        // Тригери-дільники (як у класичних октаверах) + м'яка синхронізація фаз осциляторів
-        ff1 = ! ff1;
-        if (ff1)
-        {
-            ph1 += 0.6 * wrapHalf (-ph1);
-            ff2 = ! ff2;
-            if (ff2) ph2 += 0.6 * wrapHalf (-ph2);
-        }
-    }
-
-    static double wrapHalf (double v) noexcept { return v - std::round (v); }
 
     double fs = 48000.0;
-    sn::Biquad pre1, pre2, track, upBp1, upBp2, upDc, toneLp;
+    sn::PitchDetector pitch;
+    sn::Biquad xlp1, xlp2, upBp1, upBp2, upDc, toneLp, fb1, fb2, subLp1, subLp2;
     std::array<Band, kBands> bands {};
-    float norm1 = 1.0f, norm2 = 1.0f, normUp = 1.0f;
-    float eA = 0, eR = 0, fA = 0, fR = 0, sA = 0, sR = 0, sm = 0;
-    float env = 0, envT = 0, envF = 0, envS = 0, bloomEnv = 1.0f, analogGate = 0.0f, trackHz = 900.0f;
+    std::array<float, 6> norm {};
+    float eA = 0, eR = 0, fA = 0, fR = 0, sA = 0, sR = 0, gA = 0, gR = 0, sm = 0, bpA = 0, bpR = 0;
+    float envX = 0, envR = 0, envBp = 0, envF = 0, envS = 0, bloomEnv = 1.0f, analogGate = 0.0f;
     bool armed = false, ff1 = false, ff2 = false, fresh = true;
-    int since = 0;
-    double perEst = 0.0, candidate = 0.0, ph1 = 0.0, ph2 = 0.0, wobPhase = 0.0;
+    int valid = 0, holdSamples = 1;
+    double f0 = 0.0, bpHz = 0.0, ph0 = 0.0, ph1 = 0.0, ph2 = 0.0, wobPhase = 0.0;
     float g1 = 0, g2 = 0, gu = 0, gd = 1.0f;
     float svfIc1 = 0, svfIc2 = 0, svfG = 0.1f, svfK = 1.0f, svfComp = 1.0f;
 };

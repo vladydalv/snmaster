@@ -49,6 +49,11 @@ void SpacenerdStompProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     lowDelay.setSize (2, latency + 1);
     lowDelay.clear();
     lowBlock.setSize (2, maxBlock);
+    subBlock.setSize (1, maxBlock);
+    subBlock.clear();
+    subDelay.setSize (1, latency + 1);
+    subDelay.clear();
+    subPos = 0;
     onsetBlock.setSize (1, maxBlock);
     lowPos = 0;
 
@@ -72,14 +77,19 @@ float SpacenerdStompProcessor::echoTimeMs (double bpm) const
     return juce::jlimit (40.0f, 2400.0f, (float) (60000.0 / bpm) * beats[s]);
 }
 
-void SpacenerdStompProcessor::runOctaver (float* const* data, int numCh, int n, double bpm)
+void SpacenerdStompProcessor::runOctaver (float* const* data, int numCh, int n, double bpm, float* subClean)
 {
     const bool active = on (octOn);
-    if (! active && octaver.isIdle()) { trackedHz.store (0.0f); return; }
+    if (! active && octaver.isIdle())
+    {
+        trackedHz.store (0.0f);
+        if (subClean != nullptr) std::fill_n (subClean, n, 0.0f);
+        return;
+    }
     // Вимкнено — плавно гасимо октави і повертаємо сухий сигнал (без клацання)
     const st::Octaver::Settings os { active ? p (sub1) : 0.0f, active ? p (sub2) : 0.0f, active ? p (octUp) : 0.0f, active ? p (octDry) : 100.0f,
                                      p (octChar), p (octTone), p (bloom), p (wobble), syncedRate (bpm) };
-    octaver.process (data, numCh, n, os);
+    octaver.process (data, numCh, n, os, subClean);
     trackedHz.store (octaver.getTrackedHz());
 }
 
@@ -142,7 +152,7 @@ void SpacenerdStompProcessor::processChunk (juce::AudioBuffer<float>& buffer)
 
     // --- Октавер до драйву (класика: октава «в» фуз)
     const bool octPre = (int) p (octPos) == 0;
-    if (octPre) runOctaver (data, numCh, n, bpm);
+    if (octPre) runOctaver (data, numCh, n, bpm, subBlock.getWritePointer (0));
 
     // Цілі
     const bool driveActive = on (driveOn);
@@ -232,6 +242,24 @@ void SpacenerdStompProcessor::processChunk (juce::AudioBuffer<float>& buffer)
 
     for (int ch = 0; ch < numCh; ++ch)
         buffer.addFrom (ch, 0, lowBlock, ch, 0, n);
+
+    // --- Суб октавера в режимі Pre: вхідний фільтр драйву зрізає низ, тож чистий суб іде в обхід
+    //     (лише та частка, що справді пішла в драйв: без Clean Bass і коли драйв увімкнений)
+    if (octPre)
+    {
+        const float amt = driveMix * (1.0f - bassMix);
+        const int dlen = subDelay.getNumSamples();
+        float* line = subDelay.getWritePointer (0);
+        const float* src = subBlock.getReadPointer (0);
+        for (int i = 0; i < n; ++i)
+        {
+            const int wp = (subPos + i) % dlen;
+            line[wp] = src[i];
+            const float v = amt * line[(wp + 1) % dlen];
+            for (int ch = 0; ch < numCh; ++ch) data[ch][i] += v;
+        }
+        subPos = (subPos + n) % dlen;
+    }
 
     // --- Октавер після драйву (чистіший трекінг, октави не спотворюються)
     if (! octPre) runOctaver (data, numCh, n, bpm);

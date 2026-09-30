@@ -84,11 +84,12 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createStompLayout()
     });
     l.add (std::make_unique<B> (id (octOn), "Octave On", false));
     l.add (std::make_unique<C> (id (octPos), "Octave Position", StringArray { "Pre", "Post" }, 0));
-    l.add (std::make_unique<F> (id (sub1),   "Sub -1",   lin (0.0f, 100.0f), 70.0f, pct));
-    l.add (std::make_unique<F> (id (sub2),   "Sub -2",   lin (0.0f, 100.0f), 0.0f, pct));
-    l.add (std::make_unique<F> (id (octUp),  "Up +1",    lin (0.0f, 100.0f), 0.0f, pct));
+    // 100 % = октава так само гучна, як вхід; до 200 % (+6 дБ) — октава домінує
+    l.add (std::make_unique<F> (id (sub1),   "Sub -1",   lin (0.0f, 200.0f), 100.0f, pct));
+    l.add (std::make_unique<F> (id (sub2),   "Sub -2",   lin (0.0f, 200.0f), 0.0f, pct));
+    l.add (std::make_unique<F> (id (octUp),  "Up +1",    lin (0.0f, 200.0f), 0.0f, pct));
     l.add (std::make_unique<F> (id (octDry), "Octave Dry", lin (0.0f, 100.0f), 100.0f, pct));
-    l.add (std::make_unique<F> (id (octChar), "Character", lin (0.0f, 100.0f), 50.0f, charText));
+    l.add (std::make_unique<F> (id (octChar), "Character", lin (0.0f, 100.0f), 75.0f, charText));
     l.add (std::make_unique<F> (id (octTone), "Octave Tone", skew (150.0f, 8000.0f, 1500.0f), 2500.0f, hz));
     l.add (std::make_unique<F> (id (bloom),  "Bloom",    skew (0.0f, 2000.0f, 300.0f), 0.0f, ms));
     l.add (std::make_unique<F> (id (wobble), "Wobble",   lin (0.0f, 100.0f), 0.0f, pct));

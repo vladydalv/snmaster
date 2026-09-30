@@ -48,7 +48,7 @@ private:
     void processChunk (juce::AudioBuffer<float>&);
     float syncedRate (double bpm) const;
     float echoTimeMs (double bpm) const;
-    void runOctaver (float* const* data, int numCh, int n, double bpm);
+    void runOctaver (float* const* data, int numCh, int n, double bpm, float* subClean = nullptr);
 
     std::map<juce::String, std::atomic<float>*> params;
     std::atomic<int> currentPreset { 0 };
@@ -62,8 +62,8 @@ private:
     juce::dsp::LinkwitzRileyFilter<float> bassSplit;
 
     // Чистий низ (Clean Bass) затримується на латентність оверсемплінгу, щоб скластися в фазі
-    juce::AudioBuffer<float> lowDelay, lowBlock, onsetBlock;
-    int lowPos = 0, latency = 0;
+    juce::AudioBuffer<float> lowDelay, lowBlock, onsetBlock, subBlock, subDelay;
+    int lowPos = 0, subPos = 0, latency = 0;
 
     // Згладжені налаштування педалі (оновлюються кожні kSub семплів)
     st::Pedal::Settings sm {};
