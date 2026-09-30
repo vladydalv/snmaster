@@ -76,6 +76,9 @@ sn_add_plugin(SpacenerdFeedback Feedback "Spacenerd Feedback" Fbck
 sn_add_plugin(SpacenerdEra Era "Spacenerd Era" Erap
     "Decade-style mastering on an XY pixel display: year x intensity, genre-aware" "Fx Mastering")
 
+sn_add_plugin(SpacenerdStomp Stomp "Spacenerd Stomp" Stmp
+    "Pedal: circuit-morph drive/fuzz, tremolo/vibrato, tape echo" "Fx Distortion Modulation Delay")
+
 # Офлайн-тести DSP (не потрапляють у плагіни)
 option(SN_BUILD_TESTS "Build offline DSP tests" OFF)
 if(SN_BUILD_TESTS)
@@ -97,4 +100,5 @@ if(SN_BUILD_TESTS)
     sn_add_test(EraTest Era EraTest.cpp)
     sn_add_test(AssistTest Master AssistTest.cpp)
     sn_add_test(AnalyzerAccuracy Master AnalyzerAccuracy.cpp)
+    sn_add_test(StompTest Stomp StompTest.cpp)
 endif()

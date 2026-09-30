@@ -1,6 +1,6 @@
 # Spacenerd Plugins
 
-Master · Tone · Feedback · Era
+Master · Tone · Feedback · Era · Stomp
 
 AU (Logic Pro) + VST3, Universal: Apple Silicon + Intel.
 
@@ -42,6 +42,14 @@ Transient → Tube → Tape → Exciter → De-esser, загальний Mix (с
 - Інтенсивність 0 = прозоро. **Gain Match** — порівняння з Bypass на однаковій гучності.
 - **Split**: бас з одного десятиліття, верх з іншого (маркери LOW / HIGH на дисплеї).
 - **Reference Match**: завантажте WAV/AIFF/MP3 улюбленої платівки — курсор стане на її десятиліття (для обраного жанру).
+
+## Spacenerd Stomp — педаль: драйв/фуз, модуляція, плівкове ехо
+Ланцюг: **Circuit Morph → Modulation → Tape Echo**. Ставити перед амп-симом (TONEX тощо).
+- **Circuit Morph** (дисплей: X — схема, Y — гейн): плавний морф між типами схем різних епох — '65 Germanium → '70 British (два «лампові» каскади, напрям Orange) → '73 Triangle (стоунерна стіна) → '81 Op-amp (гранж) → Modern. Гучність вирівняна: морф і гейн не стрибають за рівнем.
+- **Battery**: «сіла» батарейка — зсув робочої точки, просідання, тихі хвости нот тріщать і обриваються.
+- **Clean Bass**: низ нижче заданої частоти обходить педаль (для баса: фуз зверху, щільний чистий низ).
+- **Modulation**: Tremolo, Harmonic (низи/верхи в протифазі), Pan (стерео, як у «In Like the Rose» — узагальнено, не копія), Vibrato. **Shape** — від синуса до «рубаного», **Sync** до темпу Logic, **Rise** — модуляція наростає після кожної ноти.
+- **Tape Echo**: Time / Sync, Repeats (до самозбудження), Tone, **Wear** (детонація й насичення плівки). Хвости догравають після вимикання.
 
 ## Збірка
 Автоматично в GitHub Actions при кожному push у `main`.
