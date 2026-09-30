@@ -73,6 +73,9 @@ sn_add_plugin(SpacenerdTone Tone "Spacenerd Tone" Tone
 sn_add_plugin(SpacenerdFeedback Feedback "Spacenerd Feedback" Fbck
     "Guitar amp feedback emulation: pitch-tracked resonant loop" "Fx Distortion")
 
+sn_add_plugin(SpacenerdEra Era "Spacenerd Era" Erap
+    "Decade-style mastering on an XY pixel display: year x intensity, genre-aware" "Fx Mastering")
+
 # Офлайн-тести DSP (не потрапляють у плагіни)
 option(SN_BUILD_TESTS "Build offline DSP tests" OFF)
 if(SN_BUILD_TESTS)
@@ -91,4 +94,5 @@ if(SN_BUILD_TESTS)
     sn_add_test(MasterAudit Master MasterAudit.cpp)
     sn_add_test(FeedbackAudit Feedback FeedbackAudit.cpp)
     sn_add_test(ToneAudit Tone ToneAudit.cpp)
+    sn_add_test(EraTest Era EraTest.cpp)
 endif()
