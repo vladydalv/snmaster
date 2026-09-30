@@ -40,7 +40,11 @@ int AnalyzerPanel::targetGenreIdx() const
 void AnalyzerPanel::feedForTest()
 {
     proc.inFifo.pull  ([this] (const float* l, const float* r, int n) { inAn.push (l, r, n); });
-    proc.outFifo.pull ([this] (const float* l, const float* r, int n) { outAn.push (l, r, n); });
+    proc.outFifo.pull ([this] (const float* l, const float* r, int n)
+    {
+        outAn.push (l, r, n);
+        for (int i = 0; i < n; ++i) tickPeak = std::max (tickPeak, std::max (std::abs (l[i]), std::abs (r[i])));
+    });
 }
 
 void AnalyzerPanel::tick()
@@ -71,10 +75,15 @@ void AnalyzerPanel::tick()
     else
         learnButton.setButtonText (assistButton.isEnabled() ? "RE-LEARN" : "LEARN");
 
-    if (++frameCounter % 10 == 0 && outAn.hasSignal())
+    recentPeaks[(size_t) peakPos] = tickPeak;
+    peakPos = (peakPos + 1) % (int) recentPeaks.size();
+    tickPeak = 0.0f;
+
+    if (++frameCounter % 6 == 0 && outAn.hasSignal())
     {
-        const float lufs = proc.loudness.integrated.load();
-        const float tp = sn::gainToDb (proc.truePeakMax.load());
+        // Останні ~3 с, а не від початку відтворення: результат повороту ручки видно одразу
+        const float lufs = proc.loudness.shortTerm.load();
+        const float tp = sn::gainToDb (*std::max_element (recentPeaks.begin(), recentPeaks.end()));
         report = an::analyse (outAn.average(), lufs, tp, outAn.correlation(), outAn.lowSideDb(), targetYear(), targetGenreIdx());
     }
     if (assistMessageFrames > 0) --assistMessageFrames;
@@ -252,25 +261,37 @@ void AnalyzerPanel::paint (Graphics& g)
                 line, Justification::centredLeft);
     v.removeFromTop (6.0f);
 
-    auto drawLine = [&] (const String& text, Colour c)
+    auto drawLine = [&] (const String& text, Colour c, const String& fix = {})
     {
-        auto l = v.removeFromTop (19.0f);
+        if (v.getHeight() < 16.0f) return;
+        auto l = v.removeFromTop (18.0f);
         g.setColour (c);
         g.fillEllipse (Rectangle<float> (7.0f, 7.0f).withCentre ({ l.getX() + 4.0f, l.getCentreY() }));
         g.setColour (Theme::text);
         g.setFont (FontOptions (12.0f));
         g.drawFittedText (text, l.withTrimmedLeft (14.0f).toNearestInt(), Justification::centredLeft, 1, 0.85f);
+        if (fix.isNotEmpty() && v.getHeight() >= 15.0f)
+        {
+            auto f = v.removeFromTop (16.0f).withTrimmedLeft (14.0f);
+            g.setColour (Theme::accent2);
+            g.setFont (FontOptions (11.0f, Font::bold));
+            g.drawFittedText (String (CharPointer_UTF8 ("\xe2\x86\x92 ")) + fix, f.toNearestInt(), Justification::centredLeft, 1, 0.85f);
+        }
+        v.removeFromTop (3.0f);
     };
 
     if (assistMessageFrames > 0 && assistMessage.isNotEmpty())
         drawLine (assistMessage, Theme::accent);
+    if (! sig)
+        drawLine ("Press play: the analyzer listens to the Master output", Theme::muted,
+                  "Only EQ changes the curve. COMP / LIMITER change loudness and punch.");
     if (sig)
     {
         int shown = 0;
         for (auto& vd : report.verdicts)
         {
-            if (++shown > 5) break;
-            drawLine (vd.text, vd.level == 0 ? Theme::good : vd.level == 1 ? Theme::warn : Theme::hot);
+            if (++shown > 4) break;
+            drawLine (vd.text, vd.level == 0 ? Theme::good : vd.level == 1 ? Theme::warn : Theme::hot, vd.fix);
         }
     }
 }

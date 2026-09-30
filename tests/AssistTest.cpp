@@ -140,6 +140,27 @@ int main()
     check (after.matchPercent > before.matchPercent + 15, "Assist improves match: " + String (before.matchPercent) + "% -> " + String (after.matchPercent) + "%");
     check (midGain < -2.0f && midFreq > 150.0f && midFreq < 450.0f, "Assist cuts the mud region");
 
+    // Чи рухається крива YOUR MIX від ручок (а не намальована): LOW GAIN +12 і HIGH GAIN -12
+    {
+        auto band = [] (const an::Spectrum& sp, float f) { for (int b = 0; b < an::kBands; ++b) if (an::bandHz[(size_t) b] >= f) return sp[(size_t) b]; return 0.0f; };
+        const auto before2 = an.mixSpectrum();
+        p.apvts.getParameter (ParamIDs::limOn)->setValueNotifyingHost (0.0f);
+        play (3.0);
+        const auto ref = an::normalise (an.mixSpectrum());
+        auto* lg = p.apvts.getParameter (ParamIDs::lowGain);  lg->setValueNotifyingHost (lg->convertTo0to1 (12.0f));
+        auto* lf = p.apvts.getParameter (ParamIDs::lowFreq);  lf->setValueNotifyingHost (lf->convertTo0to1 (100.0f));
+        auto* hg = p.apvts.getParameter (ParamIDs::highGain); hg->setValueNotifyingHost (hg->convertTo0to1 (-12.0f));
+        play (1.0);
+        const auto after1s = an::normalise (an.mixSpectrum());
+        play (2.0);
+        const auto after3s = an::normalise (an.mixSpectrum());
+        std::cout << "   63 Hz: " << band (ref, 63) << " -> 1s " << band (after1s, 63) << " -> 3s " << band (after3s, 63) << " dB" << std::endl;
+        std::cout << "   12.5 kHz: " << band (ref, 12500) << " -> 1s " << band (after1s, 12500) << " -> 3s " << band (after3s, 12500) << " dB" << std::endl;
+        juce::ignoreUnused (before2);
+        check (band (after1s, 63) - band (ref, 63) > 6.0f && band (ref, 12500) - band (after1s, 12500) > 6.0f,
+               "Mix curve follows EQ within 1 s");
+    }
+
     // Знімок
     auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.5f);
     File file ("/home/claude/master.png"); file.deleteFile();

@@ -17,6 +17,7 @@ public:
     void feedForTest();
     void applyAssist();
     const an::Report& getReport() const { return report; }
+    an::Spectrum mixSpectrum() const { return outAn.average(); }
 
 private:
     float targetYear() const;
@@ -31,6 +32,9 @@ private:
     juce::String assistMessage;
     int assistMessageFrames = 0;
     std::vector<float> learnLufs;
+    std::array<float, 90> recentPeaks {};   // пік виходу за останні ~3 с (по тіках таймера)
+    int peakPos = 0;
+    float tickPeak = 0.0f;
 
     snui::Segmented genreSel;
     snui::LabeledCombo decadeSel;

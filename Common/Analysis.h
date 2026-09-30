@@ -136,7 +136,7 @@ private:
 
         const double binHz = fs / size;
         const float norm = 4.0f / ((float) size * (float) size);
-        constexpr float frameAvg = 0.03f;   // ≈ 3 с при кроці 1/4 вікна
+        constexpr float frameAvg = 0.22f;   // ≈ 0.4 с: результат повороту ручки видно одразу
         for (int b = 0; b < kBands; ++b)
         {
             // Межі смуги в точках FFT; крайні точки враховуються частково (важливо для низьких смуг)
@@ -170,17 +170,18 @@ private:
 };
 
 //==============================================================================
-struct Verdict { juce::String text; int level; };   // level: 0 добре, 1 увага, 2 проблема
+struct Verdict { juce::String text; int level; juce::String fix = {}; };   // level: 0 добре, 1 увага, 2 проблема; fix — яку ручку крутити
 
-struct Region { const char* tooMuch; const char* tooLittle; float lo, hi; };
+/** Регіон спектру: назва проблеми і підказка, яку ручку Master крутити. */
+struct Region { const char* tooMuch; const char* tooLittle; const char* fixMuch; const char* fixLittle; float lo, hi; };
 inline const std::array<Region, 6> regions
 {{
-    { "Boomy sub",               "No sub weight",       31.5f,   50.0f },
-    { "Boomy bass",              "Thin bass",           63.0f,  125.0f },
-    { "Muddy / woolly low-mids", "Hollow low-mids",    160.0f,  400.0f },
-    { "Boxy / honky mids",       "Scooped mids",       500.0f, 1250.0f },
-    { "Harsh presence",          "Dull, no bite",     1600.0f, 5000.0f },
-    { "Fizzy top",               "No air on top",     6300.0f, 16000.0f },
+    { "Boomy sub",               "No sub weight",   "EQ: LOW CUT 30-40 Hz, or LOW 60 Hz + LOW GAIN -",  "EQ: LOW 60 Hz, LOW GAIN +",          31.5f,   50.0f },
+    { "Boomy bass",              "Thin bass",       "EQ: LOW 100 Hz, LOW GAIN -",                        "EQ: LOW 100 Hz, LOW GAIN +",         63.0f,  125.0f },
+    { "Muddy / woolly low-mids", "Hollow low-mids", "EQ: MID 250 Hz, MID GAIN -",                        "EQ: MID 250 Hz, MID GAIN +",        160.0f,  400.0f },
+    { "Boxy / honky mids",       "Scooped mids",    "EQ: MID 800 Hz, MID GAIN -",                        "EQ: MID 800 Hz, MID GAIN +",        500.0f, 1250.0f },
+    { "Harsh presence",          "Dull, no bite",   "EQ: MID 3 kHz, MID GAIN -",                         "EQ: MID 3 kHz, MID GAIN +",        1600.0f, 5000.0f },
+    { "Fizzy top",               "No air on top",   "EQ: HIGH 8 kHz, HIGH GAIN -",                       "EQ: HIGH 10 kHz, HIGH GAIN +",     6300.0f, 16000.0f },
 }};
 
 /** Середнє відхилення форми міксу від цілі в межах регіону. */
@@ -232,7 +233,8 @@ inline Report analyse (const Spectrum& mix, float lufsIntegrated, float truePeak
         if (std::abs (d) > 2.5f)
             rep.verdicts.push_back ({ juce::String (d > 0 ? r.tooMuch : r.tooLittle) + "  " + (d > 0 ? "+" : "") + juce::String (d, 1)
                                       + " dB  (" + juce::String (juce::roundToInt (r.lo)) + "-" + juce::String (juce::roundToInt (r.hi)) + " Hz)",
-                                      std::abs (d) > 4.5f ? 2 : 1 });
+                                      std::abs (d) > 4.5f ? 2 : 1,
+                                      juce::String (d > 0 ? r.fixMuch : r.fixLittle) + juce::String (juce::roundToInt (std::min (6.0f, std::abs (d)))) });
     }
 
     const float targetLufs = era::forYear (year, genre).targetLufs;
@@ -240,18 +242,20 @@ inline Report analyse (const Spectrum& mix, float lufsIntegrated, float truePeak
     if (lufsIntegrated > -70.0f)
     {
         const float dl = lufsIntegrated - targetLufs;
-        if (dl < -3.0f)      rep.verdicts.push_back ({ "Quiet for " + juce::String (genreName (genre)) + " " + decadeName (year) + ": " + juce::String (lufsIntegrated, 1) + " LUFS (typical " + juce::String (juce::roundToInt (targetLufs)) + ")", 1 });
-        else if (dl > 2.0f)  rep.verdicts.push_back ({ "Louder than typical: " + juce::String (lufsIntegrated, 1) + " LUFS (streaming will turn it down)", 1 });
+        if (dl < -3.0f)      rep.verdicts.push_back ({ "Quiet for " + juce::String (genreName (genre)) + " " + decadeName (year) + ": " + juce::String (lufsIntegrated, 1) + " LUFS (typical " + juce::String (juce::roundToInt (targetLufs)) + ")", 1,
+                                                       "LIMITER: GAIN +" + juce::String (juce::roundToInt (-dl)) + " dB" });
+        else if (dl > 2.0f)  rep.verdicts.push_back ({ "Louder than typical: " + juce::String (lufsIntegrated, 1) + " LUFS (streaming will turn it down)", 1,
+                                                       "LIMITER: GAIN -" + juce::String (juce::roundToInt (dl)) + " dB" });
         loudPenalty = std::max (0.0f, std::abs (dl) - 1.5f);
 
         const float plr = truePeakDb - lufsIntegrated;
-        if (plr < 6.0f)       { rep.verdicts.push_back ({ "Over-compressed / squashed (PLR " + juce::String (plr, 1) + " dB)", 2 }); dynPenalty = (6.0f - plr) * 2.0f; }
-        else if (plr < 8.0f)  rep.verdicts.push_back ({ "Dense, little punch left (PLR " + juce::String (plr, 1) + " dB)", 1 });
-        else if (plr > 16.0f) rep.verdicts.push_back ({ "Very dynamic: may sound weak on phones (PLR " + juce::String (plr, 1) + " dB)", 1 });
-        if (truePeakDb > -0.5f) rep.verdicts.push_back ({ "True peak " + juce::String (truePeakDb, 1) + " dBTP: risk of distortion after MP3/streaming", 2 });
+        if (plr < 6.0f)       { rep.verdicts.push_back ({ "Over-compressed / squashed (PLR " + juce::String (plr, 1) + " dB)", 2, "LIMITER: GAIN -, COMP: THRESHOLD +" }); dynPenalty = (6.0f - plr) * 2.0f; }
+        else if (plr < 8.0f)  rep.verdicts.push_back ({ "Dense, little punch left (PLR " + juce::String (plr, 1) + " dB)", 1, "COMP: ATTACK 20-30 ms, or LIMITER: GAIN -" });
+        else if (plr > 16.0f) rep.verdicts.push_back ({ "Very dynamic: may sound weak on phones (PLR " + juce::String (plr, 1) + " dB)", 1, "COMP: THRESHOLD -, RATIO 2-3" });
+        if (truePeakDb > -0.5f) rep.verdicts.push_back ({ "Peaks " + juce::String (truePeakDb, 1) + " dB: may distort after MP3/streaming", 2, "LIMITER: ON, CEILING -1 dB" });
     }
-    if (lowSideDb > -12.0f) rep.verdicts.push_back ({ "Bass is wide (not mono): use Mono Bass", 1 });
-    if (correlation < 0.0f)  rep.verdicts.push_back ({ "Phase problem: mix collapses in mono", 2 });
+    if (lowSideDb > -12.0f) rep.verdicts.push_back ({ "Bass is wide (not mono)", 1, "STEREO: MONO BASS 100-150 Hz" });
+    if (correlation < 0.0f)  rep.verdicts.push_back ({ "Phase problem: mix collapses in mono", 2, "STEREO: WIDTH down; check stereo tracks" });
 
     rep.matchPercent = juce::jlimit (0, 100, juce::roundToInt (100.0f - meanAbs * 9.0f - loudPenalty * 4.0f - dynPenalty));
     if (rep.verdicts.empty())
