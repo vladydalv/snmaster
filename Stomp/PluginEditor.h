@@ -51,7 +51,7 @@ class TrackView final : public juce::Component, public juce::SettableTooltipClie
 public:
     explicit TrackView (SpacenerdStompProcessor& p) : proc (p)
     {
-        setTooltip ("Note the Analog engine is tracking. Play single notes for the cleanest sub; chords: turn Character towards Poly.");
+        setTooltip ("Note the tracker hears (Vintage / Mono HQ). Single notes: Vintage or Mono HQ; chords: Poly.");
     }
     void update();
     void paint (juce::Graphics&) override;
@@ -87,7 +87,7 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    static constexpr int baseW = 1112, baseH = 802;
+    static constexpr int baseW = 1112, baseH = 834;
     void tickForTest() { content.tick(); }
 
 private:

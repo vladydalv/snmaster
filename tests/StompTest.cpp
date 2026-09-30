@@ -234,7 +234,7 @@ int main (int argc, char* argv[])
         auto out = run (noise, [] (SpacenerdStompProcessor& p)
         {
             set (p, driveOn, 1); set (p, circuit, 2.7f); set (p, gain, 100); set (p, battery, 100); set (p, cleanBass, 300);
-            set (p, octOn, 1); set (p, sub1, 100); set (p, sub2, 100); set (p, octUp, 100); set (p, octChar, 50); set (p, wobble, 100); set (p, bloom, 300);
+            set (p, octOn, 1); set (p, sub1, 100); set (p, sub2, 100); set (p, octUp, 100); set (p, octEngine, 2); set (p, wobble, 100); set (p, bloom, 300);
             set (p, modOn, 1); set (p, modMode, 1); set (p, rate, 15); set (p, depth, 100); set (p, shape, 100);
             set (p, echoOn, 1); set (p, feedback, 95); set (p, wear, 100); set (p, echoMix, 100); set (p, echoTime, 60);
         });
@@ -264,39 +264,64 @@ int main (int argc, char* argv[])
         }
         const float fund = amp (note, 0, 110.0, 0.5, 1.5);
         struct Case { const char* name; float s1, s2, up, chr; double f; };
-        for (auto cs : { Case { "analog -1", 100, 0, 0, 100, 55.0 }, Case { "analog -2", 0, 100, 0, 100, 27.5 }, Case { "analog +1", 0, 0, 100, 100, 220.0 },
-                         Case { "poly -1", 100, 0, 0, 0, 55.0 },     Case { "poly -2", 0, 100, 0, 0, 27.5 },     Case { "poly +1", 0, 0, 100, 0, 220.0 } })
+        for (auto cs : { Case { "vintage -1", 100, 0, 0, 1, 55.0 }, Case { "vintage -2", 0, 100, 0, 1, 27.5 }, Case { "vintage +1", 0, 0, 100, 1, 220.0 },
+                         Case { "mono HQ -1", 100, 0, 0, 2, 55.0 }, Case { "mono HQ -2", 0, 100, 0, 2, 27.5 }, Case { "mono HQ +1", 0, 0, 100, 2, 220.0 },
+                         Case { "poly -1", 100, 0, 0, 0, 55.0 },    Case { "poly -2", 0, 100, 0, 0, 27.5 },    Case { "poly +1", 0, 0, 100, 0, 220.0 } })
         {
             auto out = run (note, [cs] (SpacenerdStompProcessor& p)
             {
                 set (p, octOn, 1); set (p, octDry, 0); set (p, sub1, cs.s1); set (p, sub2, cs.s2); set (p, octUp, cs.up);
-                set (p, octChar, cs.chr); set (p, octTone, 8000);
+                set (p, octEngine, cs.chr); set (p, octTone, 8000);
             });
             const float target = amp (out, 0, cs.f, 0.5, 1.5);
             const float rel = sn::gainToDb (target / fund);
             check (finite (out) && rel > -9.0f, String (cs.name) + ": " + String (cs.f, 1) + " Hz at " + String (rel, 1) + " dB re input fundamental");
         }
 
+        // Чистота (без «муті»): вихід періодичний з періодом нової ноти
+        auto nacf = [] (const AudioBuffer<float>& b, double L)
+        {
+            const int s0 = (int) (0.4 * fs), e = (int) (1.4 * fs);
+            const int Li = (int) L; const float t = (float) (L - Li);
+            double xy = 0, xx = 0, yy = 0;
+            for (int i = s0; i < e; ++i)
+            {
+                const float x = b.getSample (0, i), y = (1.0f - t) * b.getSample (0, i + Li) + t * b.getSample (0, i + Li + 1);
+                xy += x * y; xx += x * x; yy += y * y;
+            }
+            return (float) (xy / std::sqrt (xx * yy + 1e-30));
+        };
+        for (auto [eng, voice, ratio] : { std::tuple<int, int, double> { 1, 0, 0.5 }, { 2, 0, 0.5 }, { 2, 2, 2.0 }, { 1, 2, 2.0 } })
+        {
+            auto out = run (note, [eng = eng, voice = voice] (SpacenerdStompProcessor& p)
+            {
+                set (p, octOn, 1); set (p, octDry, 0); set (p, octEngine, (float) eng); set (p, octTone, 8000);
+                set (p, sub1, voice == 0 ? 100.0f : 0.0f); set (p, octUp, voice == 2 ? 100.0f : 0.0f);
+            });
+            const float c = nacf (out, fs / (110.0 * ratio));
+            check (c > 0.9f, String (eng == 1 ? "vintage " : "mono HQ ") + (voice == 0 ? "-1" : "+1") + " clarity " + String (c, 3));
+        }
+
         // Poly тримає акорд: A2 + E3 → суб обох нот
         const auto chord = sine ({ { 110.0, 0.12f }, { 164.81, 0.12f } }, 1.5);
-        auto poly = run (chord, [] (SpacenerdStompProcessor& p) { set (p, octOn, 1); set (p, octDry, 0); set (p, sub1, 100); set (p, octChar, 0); set (p, octTone, 8000); });
+        auto poly = run (chord, [] (SpacenerdStompProcessor& p) { set (p, octOn, 1); set (p, octDry, 0); set (p, sub1, 100); set (p, octEngine, 0); set (p, octTone, 8000); });
         const float a55 = sn::gainToDb (amp (poly, 0, 55.0, 0.5, 1.5) / 0.12f), a82 = sn::gainToDb (amp (poly, 0, 82.4, 0.5, 1.5) / 0.12f);
         check (a55 > -9.0f && a82 > -9.0f, "poly chord sub: 55 Hz " + String (a55, 1) + " dB, 82.4 Hz " + String (a82, 1) + " dB");
 
         // Аналоговий суб мовчить у тиші (без «бубніння»)
         AudioBuffer<float> silence (2, (int) fs); silence.clear();
-        auto quiet = run (silence, [] (SpacenerdStompProcessor& p) { set (p, octOn, 1); set (p, octChar, 100); set (p, sub1, 100); set (p, sub2, 100); });
+        auto quiet = run (silence, [] (SpacenerdStompProcessor& p) { set (p, octOn, 1); set (p, octEngine, 1); set (p, sub1, 100); set (p, sub2, 100); });
         check (quiet.getMagnitude (0, quiet.getNumSamples()) < 1.0e-4f, "analog sub silent on silence");
 
         // Bloom: октава наростає після атаки
-        auto bl = run (note, [] (SpacenerdStompProcessor& p) { set (p, octOn, 1); set (p, octDry, 0); set (p, sub1, 100); set (p, octChar, 0); set (p, bloom, 500); });
+        auto bl = run (note, [] (SpacenerdStompProcessor& p) { set (p, octOn, 1); set (p, octDry, 0); set (p, sub1, 100); set (p, octEngine, 0); set (p, bloom, 500); });
         const float early = rmsDb (bl, 0, 0.0, 0.05), late = rmsDb (bl, 0, 1.2, 1.5);
         check (late > early + 8.0f, "bloom swells: " + String (early, 1) + " -> " + String (late, 1) + " dB");
 
         // Wobble: рівень октави «дихає» з частотою LFO
         auto wb = run (note, [] (SpacenerdStompProcessor& p)
         {
-            set (p, octOn, 1); set (p, octDry, 0); set (p, octUp, 100); set (p, octChar, 100); set (p, octTone, 6000);
+            set (p, octOn, 1); set (p, octDry, 0); set (p, octUp, 100); set (p, octEngine, 1); set (p, octTone, 6000);
             set (p, wobble, 100); set (p, rate, 4.0f);
         });
         float mn = 100.0f, mx = -100.0f;

@@ -238,7 +238,7 @@ StompContent::StompContent (SpacenerdStompProcessor& p)
       presetBox (p),
       pad (p),
       drive   (p.apvts, "DRIVE", driveOn, 3),
-      octSec  (p.apvts, "OCTAVE", octOn, 10),
+      octSec  (p.apvts, "OCTAVE", octOn, 7),
       modSec  (p.apvts, "MODULATION", modOn, 8),
       echoSec (p.apvts, "TAPE ECHO", echoOn, 5),
       output (p)
@@ -252,13 +252,13 @@ StompContent::StompContent (SpacenerdStompProcessor& p)
     drive.knob (s, cleanBass, "Clean Bass");
     drive.knob (s, level, "Level", true);
 
-    octSec.add (std::make_unique<Segmented> (s, octPos, "Position"), 1, 44);
-    trackView = static_cast<TrackView*> (&octSec.add (std::make_unique<TrackView> (p), 1, 44));
+    octSec.add (std::make_unique<Segmented> (s, octEngine, "Engine"), 3, 44);
+    octSec.add (std::make_unique<Segmented> (s, octPos, "Position"), 2, 44);
+    trackView = static_cast<TrackView*> (&octSec.add (std::make_unique<TrackView> (p), 2, 44));
     octSec.knob (s, sub1, "Sub -1");
     octSec.knob (s, sub2, "Sub -2");
     octSec.knob (s, octUp, "Up +1");
     octSec.knob (s, octDry, "Dry");
-    octSec.knob (s, octChar, "Character");
     octSec.knob (s, octTone, "Tone");
     octSec.knob (s, bloom, "Bloom");
     octSec.knob (s, wobble, "Wobble");
@@ -309,7 +309,7 @@ void StompContent::resized()
 
     output.setBounds (r.removeFromRight (180));
     r.removeFromRight (gap);
-    octSec.setBounds (r.removeFromTop (180));
+    octSec.setBounds (r.removeFromTop (212));
     r.removeFromTop (gap);
     const int half = (r.getWidth() - gap) / 2;
     modSec.setBounds (r.removeFromLeft (half));

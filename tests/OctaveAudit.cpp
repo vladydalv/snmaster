@@ -20,7 +20,7 @@ static void pluck (AudioBuffer<float>& b, double f0, double start, float amp, un
     std::mt19937 rng (seed);
     std::uniform_real_distribution<float> u (-1.0f, 1.0f);
     const double N = fs / f0;
-    const int len = (int) N + 2;
+    const int len = std::max (2, (int) std::lround (N - 0.5));   // період = len + 0.5 (усереднювальний фільтр)
     std::vector<float> line ((size_t) len);
     for (auto& v : line) v = u (rng);
     // Злегка згладити збудження (медіатор середньої жорсткості)
@@ -58,6 +58,7 @@ static float band (const AudioBuffer<float>& b, double f, double from, double to
     return (float) (2.0 * std::sqrt (re * re + im * im) / (e - s));
 }
 
+static float lastTracked = 0.0f;
 static AudioBuffer<float> run (const AudioBuffer<float>& in, std::function<void (SpacenerdStompProcessor&)> setup)
 {
     SpacenerdStompProcessor p;
@@ -71,8 +72,24 @@ static AudioBuffer<float> run (const AudioBuffer<float>& in, std::function<void 
     {
         AudioBuffer<float> chunk (out.getArrayOfWritePointers(), 2, pos, std::min (256, out.getNumSamples() - pos));
         p.processBlock (chunk, m);
+        if (pos == (int) (0.5 * fs) / 256 * 256) lastTracked = p.trackedHz.load();
     }
     return out;
+}
+
+/** Нормована автокореляція на лагу L (дробовий): 1 = ідеально періодичний сигнал з цим періодом. */
+static float nacf (const AudioBuffer<float>& b, double L, double from, double to)
+{
+    const int s = (int) (from * fs), e = std::min (b.getNumSamples() - (int) L - 2, (int) (to * fs));
+    const int Li = (int) L; const float t = (float) (L - Li);
+    double xy = 0, xx = 0, yy = 0;
+    for (int i = s; i < e; ++i)
+    {
+        const float x = b.getSample (0, i);
+        const float y = (1.0f - t) * b.getSample (0, i + Li) + t * b.getSample (0, i + Li + 1);
+        xy += x * y; xx += x * x; yy += y * y;
+    }
+    return (float) (xy / std::sqrt (xx * yy + 1e-30));
 }
 
 static float rms (const AudioBuffer<float>& b, double from, double to)
@@ -85,26 +102,34 @@ int main()
 {
     ScopedJuceInitialiser_GUI init;
     struct Note { const char* name; std::vector<double> f; };
-    const std::vector<Note> notes {
-        { "E2 (low E)", { 82.41 } }, { "A2", { 110.0 } }, { "G3", { 196.0 } }, { "E1 bass", { 41.2 } }, { "A1 bass", { 55.0 } },
+    std::vector<Note> notes {
+        { "sine A2", { 110.0 } }, { "E2 (low E)", { 82.41 } }, { "A2", { 110.0 } }, { "G3", { 196.0 } }, { "E1 bass", { 41.2 } }, { "A1 bass", { 55.0 } },
         { "E5 power chord", { 82.41, 123.47, 164.81 } }, { "open E major", { 82.41, 123.47, 164.81, 207.65, 246.94, 329.63 } } };
 
+    // Частоти, які Karplus-Strong відтворює точно (період = ціле + 0.5 семпла)
+    for (auto& nt : notes) for (auto& f : nt.f) f = fs / ((double) std::lround (fs / f - 0.5) + 0.5);
     for (const auto& nt : notes)
     {
         AudioBuffer<float> in (2, (int) (fs * 2.0)); in.clear();
         unsigned seed = 1;
-        for (double f : nt.f) pluck (in, f, 0.05, 0.25f / (float) std::sqrt ((double) nt.f.size()), seed++);
+        if (String (nt.name).startsWith ("sine"))
+            for (int i = (int) (0.05 * fs); i < in.getNumSamples(); ++i)
+                for (int c = 0; c < 2; ++c) in.setSample (c, i, 0.1f * (float) std::sin (MathConstants<double>::twoPi * nt.f[0] * i / fs));
+        else
+            for (double f : nt.f) pluck (in, f, 0.05, 0.25f / (float) std::sqrt ((double) nt.f.size()), seed++);
         const float inR = rms (in, 0.1, 1.0);
         float oddE = 0.0f;
         for (double f : nt.f) for (int k = 1; k <= 5; k += 2) { const float a = band (in, f * k, 0.1, 1.0); oddE += a * a; }
         std::cout << "\n" << nt.name << "  input " << String (inR, 1) << " dB rms; ideal -1 octave comps " << String (sn::gainToDb (std::sqrt (oddE)) - inR, 1) << " dB" << std::endl;
 
-        for (int engine : { 0, 100 })
+        if (nt.f.size() == 1)
+            std::cout << "  (metric check: dry clarity " << String (nacf (in, fs / nt.f[0], 0.15, 0.9), 3) << ")" << std::endl;
+        for (int engine : { 0, 1, 2 })
             for (int voice : { 0, 1, 2 })
             {
                 auto out = run (in, [&] (SpacenerdStompProcessor& p)
                 {
-                    set (p, octOn, 1); set (p, octDry, 0); set (p, octChar, (float) engine); set (p, octTone, 8000);
+                    set (p, octOn, 1); set (p, octDry, 0); set (p, octEngine, (float) engine); set (p, octTone, 8000);
                     set (p, sub1, voice == 0 ? 100.0f : 0.0f); set (p, sub2, voice == 1 ? 100.0f : 0.0f); set (p, octUp, voice == 2 ? 100.0f : 0.0f);
                 });
                 const double ratio = voice == 0 ? 0.5 : voice == 1 ? 0.25 : 2.0;
@@ -121,9 +146,13 @@ int main()
                         if (nt.f.size() == 1) comps << String (fq, 0) << "Hz " << String (sn::gainToDb (a), 0) << "  ";
                     }
                 const float outR = rms (out, 0.1, 1.0);
-                std::cout << "  " << (engine == 0 ? "Poly  " : "Analog") << " " << (voice == 0 ? "-1" : voice == 1 ? "-2" : "+1")
+                // «Чистота»: періодичність з періодом нової ноти (NACF; 1 = ідеально чисто, менше = «муть»)
+                String clar;
+                if (nt.f.size() == 1)
+                    clar = "  clarity " + String (nacf (out, fs / (nt.f[0] * ratio), 0.15, 0.9), 3);
+                std::cout << "  " << (engine == 0 ? "Poly   " : engine == 1 ? "Vintage" : "MonoHQ ") << " " << (voice == 0 ? "-1" : voice == 1 ? "-2" : "+1")
                           << ": out " << String (outR - inR, 1) << " dB re input, octave comps " << String (sn::gainToDb (std::sqrt (newE)) - inR, 1)
-                          << " dB  | " << comps << std::endl;
+                          << " dB" << clar << " trk " << String (lastTracked, 1) << "  | " << comps << std::endl;
             }
     }
     // Навантаження CPU: 10 с стерео, октавер + усе інше

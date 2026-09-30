@@ -88,7 +88,7 @@ void SpacenerdStompProcessor::runOctaver (float* const* data, int numCh, int n, 
     }
     // Вимкнено — плавно гасимо октави і повертаємо сухий сигнал (без клацання)
     const st::Octaver::Settings os { active ? p (sub1) : 0.0f, active ? p (sub2) : 0.0f, active ? p (octUp) : 0.0f, active ? p (octDry) : 100.0f,
-                                     p (octChar), p (octTone), p (bloom), p (wobble), syncedRate (bpm) };
+                                     (int) p (octEngine), p (octTone), p (bloom), p (wobble), syncedRate (bpm) };
     octaver.process (data, numCh, n, os, subClean);
     trackedHz.store (octaver.getTrackedHz());
 }
