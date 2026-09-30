@@ -24,7 +24,7 @@ jobs:
       - name: Ad-hoc sign and package
         run: |
           mkdir -p dist
-          for P in "Spacenerd Master:SpacenerdMaster" "Spacenerd Tone:SpacenerdTone"; do
+          for P in "Spacenerd Master:SpacenerdMaster" "Spacenerd Tone:SpacenerdTone" "Spacenerd Feedback:SpacenerdFeedback"; do
             NAME="${P%%:*}"; TARGET="${P##*:}"
             ART="build/${TARGET}_artefacts/Release"
             codesign --force --deep --sign - "$ART/AU/$NAME.component"
@@ -47,3 +47,4 @@ jobs:
           auval -a | grep -i spacenerd || true
           auval -strict -v aufx Mstr Spcn
           auval -strict -v aufx Tone Spcn
+          auval -strict -v aufx Fbck Spcn

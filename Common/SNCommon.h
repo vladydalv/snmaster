@@ -25,6 +25,17 @@ struct AtomicMax
 };
 
 //==============================================================================
+/** Однополюсний фільтр (для DC-блокера і м'якого завалу ВЧ). */
+struct OnePole
+{
+    float a = 0.0f, z = 0.0f;
+    void setLowpass (double fs, double hz) { a = (float) std::exp (-2.0 * juce::MathConstants<double>::pi * hz / fs); }
+    float lowpass (float x) noexcept  { z = x + a * (z - x); return z; }
+    float highpass (float x) noexcept { return x - lowpass (x); }
+    void reset() { z = 0.0f; }
+};
+
+//==============================================================================
 /** Біквад (TDF-II, double) з формулами RBJ Audio EQ Cookbook.
     Перерахунок коефіцієнтів не виділяє пам'ять — безпечно в аудіопотоці і для плавної автоматизації. */
 struct Biquad
@@ -71,6 +82,12 @@ struct Biquad
     {
         const double w = w0 (fs, f), cs = std::cos (w), al = std::sin (w) / (2.0 * q);
         set ((1 + cs) / 2, -(1 + cs), (1 + cs) / 2, 1 + al, -2 * cs, 1 - al);
+    }
+    /** Смуговий фільтр з підсиленням 0 дБ на центральній частоті. */
+    void setBandPass (double fs, double f, double q) noexcept
+    {
+        const double w = w0 (fs, f), cs = std::cos (w), al = std::sin (w) / (2.0 * q);
+        set (al, 0.0, -al, 1 + al, -2 * cs, 1 - al);
     }
     void setBypass() noexcept { b0 = 1; b1 = b2 = a1 = a2 = 0; }
 

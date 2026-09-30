@@ -164,6 +164,11 @@ void Segmented::mouseExit (const MouseEvent&)   { hover = -1; repaint(); }
 Section::Section (APVTS& state, const String& t, const String& powerId, int cols)
     : title (t), columns (cols)
 {
+    if (powerId.isEmpty())
+    {
+        power.setToggleState (true, dontSendNotification);   // секція без вимикача
+        return;
+    }
     power.setTooltip ("On / Off");
     addAndMakeVisible (power);
     powerAttachment = std::make_unique<APVTS::ButtonAttachment> (state, powerId, power);

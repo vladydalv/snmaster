@@ -70,6 +70,9 @@ sn_add_plugin(SpacenerdMaster Master "Spacenerd Master" Mstr
 sn_add_plugin(SpacenerdTone Tone "Spacenerd Tone" Tone
     "Channel colour: transient shaper, tube, tape, exciter, de-esser" "Fx Distortion Dynamics")
 
+sn_add_plugin(SpacenerdFeedback Feedback "Spacenerd Feedback" Fbck
+    "Guitar amp feedback emulation: pitch-tracked resonant loop" "Fx Distortion")
+
 # Офлайн-тести DSP (не потрапляють у плагіни)
 option(SN_BUILD_TESTS "Build offline DSP tests" OFF)
 if(SN_BUILD_TESTS)
@@ -84,4 +87,5 @@ if(SN_BUILD_TESTS)
     endfunction()
     sn_add_test(MasterTest Master MasterTest.cpp)
     sn_add_test(ToneTest   Tone   ToneTest.cpp)
+    sn_add_test(FeedbackTest Feedback FeedbackTest.cpp)
 endif()

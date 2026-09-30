@@ -9,17 +9,6 @@
 namespace sn
 {
 //==============================================================================
-/** Однополюсний фільтр (для DC-блокера і м'якого завалу ВЧ). */
-struct OnePole
-{
-    float a = 0.0f, z = 0.0f;
-    void setLowpass (double fs, double hz) { a = (float) std::exp (-2.0 * juce::MathConstants<double>::pi * hz / fs); }
-    float lowpass (float x) noexcept  { z = x + a * (z - x); return z; }
-    float highpass (float x) noexcept { return x - lowpass (x); }
-    void reset() { z = 0.0f; }
-};
-
-//==============================================================================
 /** Тріодний каскад: асиметрична характеристика (парні гармоніки), зсув робочої точки
     від рівня сигналу (sag), завал ВЧ від ефекту Міллера. Малосигнальне підсилення = 1. */
 class TubeStage
