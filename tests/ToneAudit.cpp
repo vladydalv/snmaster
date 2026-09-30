@@ -83,6 +83,7 @@ int main()
         if (id.startsWith ("tape")) set (p, tapeOn, id == tapeOn ? 0.0f : 1.0f);
         if (id.startsWith ("exc"))  set (p, excOn, id == excOn ? 0.0f : 1.0f);
         if (id.startsWith ("ds"))   set (p, dsOn,  id == dsOn  ? 0.0f : 1.0f);
+        if (id == trOn)      set (p, trAttack, 50.0f);    // нейтральний шейпер (0/0) прозорий — так і має бути
         if (id == trAttack)  set (p, trSustain, 0.0f);
         if (id == trSustain) set (p, trAttack, 0.0f);
         if (id == tapeWow)   set (p, tapeWow, 0.0f);

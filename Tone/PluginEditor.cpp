@@ -85,23 +85,23 @@ ToneContent::ToneContent (SpacenerdToneProcessor& p)
 {
     auto& s = p.apvts;
 
-    tube.knob (s, tubeDrive, "Drive");
-    tube.knob (s, tubeBias,  "Bias");
-    tube.knob (s, tubeMix,   "Mix");
+    tube.knob (s, tubeDrive, "Drive").help ("tube saturation; level stays the same");
+    tube.knob (s, tubeBias,  "Bias").help ("tube operating point: higher = more even harmonics, warmer and fatter");
+    tube.knob (s, tubeMix,   "Mix").help ("blend with the clean signal");
 
     tape.add (std::make_unique<Segmented> (s, tapeSpeed, "Speed, ips"), 2, 44);
-    tape.knob (s, tapeDrive, "Drive");
-    tape.knob (s, tapeWow,   "Wow / Flutter");
+    tape.knob (s, tapeDrive, "Drive").help ("tape compression and saturation");
+    tape.knob (s, tapeWow,   "Wow / Flutter").help ("pitch drift of a worn tape machine");
 
-    exciter.knob (s, excFreq,   "Freq");
-    exciter.knob (s, excAmount, "Amount");
+    exciter.knob (s, excFreq,   "Freq").help ("harmonics are generated above this frequency");
+    exciter.knob (s, excAmount, "Amount").help ("how much new top-end harmonics are added (presence and air)");
 
-    transient.knob (s, trAttack,  "Attack",  true);
-    transient.knob (s, trSustain, "Sustain", true);
+    transient.knob (s, trAttack,  "Attack",  true).help ("+ = sharper pick/stick attack, - = softer");
+    transient.knob (s, trSustain, "Sustain", true).help ("+ = longer ring and room, - = tighter, drier");
 
-    deEss.knob (s, dsFreq,  "Freq");
-    deEss.knob (s, dsSens,  "Sensitivity");
-    deEss.knob (s, dsRange, "Range");
+    deEss.knob (s, dsFreq,  "Freq").help ("where the S sounds start (5-8 kHz for vocals)");
+    deEss.knob (s, dsSens,  "Sensitivity").help ("higher = reacts to softer S sounds");
+    deEss.knob (s, dsRange, "Range").help ("maximum reduction of S sounds");
     auto listen = std::make_unique<PillToggle> (s, dsListen, "LISTEN", Theme::gr);
     listen->setTooltip ("Hear only what the de-esser detects");
     deEss.add (std::move (listen), 1, 24);
@@ -130,11 +130,12 @@ void ToneContent::resized()
     r.removeFromTop (gap);
     auto bottom = r;
 
-    tube.setBounds (top.removeFromLeft (330));    top.removeFromLeft (gap);
-    tape.setBounds (top.removeFromLeft (300));    top.removeFromLeft (gap);
-    exciter.setBounds (top);
+    // Порядок як у ланцюгу: TRANSIENT > TUBE > TAPE, далі EXCITER > DE-ESS
+    transient.setBounds (top.removeFromLeft (230)); top.removeFromLeft (gap);
+    tube.setBounds (top.removeFromLeft (330));      top.removeFromLeft (gap);
+    tape.setBounds (top);
 
-    transient.setBounds (bottom.removeFromLeft (330)); bottom.removeFromLeft (gap);
+    exciter.setBounds (bottom.removeFromLeft (230)); bottom.removeFromLeft (gap);
     deEss.setBounds (bottom);
 }
 

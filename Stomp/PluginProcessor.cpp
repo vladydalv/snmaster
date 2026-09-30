@@ -12,7 +12,7 @@ SpacenerdStompProcessor::SpacenerdStompProcessor()
 {
     for (auto* param : getParameters())
         if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param))
-            params[ranged->getParameterID()] = apvts.getRawParameterValue (ranged->getParameterID());
+            params.add (ranged->getParameterID(), apvts.getRawParameterValue (ranged->getParameterID()));
 }
 
 bool SpacenerdStompProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -49,6 +49,8 @@ void SpacenerdStompProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     lowDelay.setSize (2, latency + 1);
     lowDelay.clear();
     lowBlock.setSize (2, maxBlock);
+    scratch.setSize (2, maxBlock);
+    modMix = on (modOn) ? 1.0f : 0.0f;
     subBlock.setSize (1, maxBlock);
     subBlock.clear();
     subDelay.setSize (1, latency + 1);
@@ -67,6 +69,12 @@ float SpacenerdStompProcessor::syncedRate (double bpm) const
     static constexpr float perBeat[] { 0.0f, 1.0f, 2.0f, 3.0f, 4.0f };    // Free, 1/4, 1/8, 1/8T, 1/16
     const int s = juce::jlimit (0, 4, (int) p (modSync));
     return s == 0 || bpm <= 0.0 ? p (rate) : (float) (bpm / 60.0) * perBeat[s];
+}
+
+double SpacenerdStompProcessor::wobbleHz (double bpm) const
+{
+    static constexpr double perBeat[] { 0.5, 1.0, 2.0, 3.0, 4.0, 8.0 };
+    return (bpm > 0.0 ? bpm : 120.0) / 60.0 * perBeat[juce::jlimit (0, 5, (int) p (wobRate))];
 }
 
 float SpacenerdStompProcessor::echoTimeMs (double bpm) const
@@ -88,7 +96,7 @@ void SpacenerdStompProcessor::runOctaver (float* const* data, int numCh, int n, 
     }
     // Вимкнено — плавно гасимо октави і повертаємо сухий сигнал (без клацання)
     const st::Octaver::Settings os { active ? p (sub1) : 0.0f, active ? p (sub2) : 0.0f, active ? p (octUp) : 0.0f, active ? p (octUp2) : 0.0f,
-                                     active ? p (octDry) : 100.0f, (int) p (octEngine), p (octTone), p (bloom), p (wobble), syncedRate (bpm),
+                                     active ? p (octDry) : 100.0f, (int) p (octEngine), p (octTone), p (bloom), p (wobble), (float) wobbleHz (bpm),
                                      p (detune) };
     octaver.process (data, numCh, n, os, subClean);
     trackedHz.store (octaver.getTrackedHz());
@@ -118,7 +126,12 @@ void SpacenerdStompProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     {
         static constexpr double perBeat[] { 0.0, 1.0, 2.0, 3.0, 4.0 };
         mod.setPhase (*ppq * perBeat[s]);
-        octaver.setWobblePhase (*ppq * perBeat[s]);
+    }
+    // Wobble — завжди в темпі (без хоста — 120 BPM)
+    if (ppq.has_value())
+    {
+        static constexpr double wobPerBeat[] { 0.5, 1.0, 2.0, 3.0, 4.0, 8.0 };
+        octaver.setWobblePhase (*ppq * wobPerBeat[juce::jlimit (0, 5, (int) p (wobRate))]);
     }
 
     const int total = buffer.getNumSamples();
@@ -269,9 +282,12 @@ void SpacenerdStompProcessor::processChunk (juce::AudioBuffer<float>& buffer)
     {
         const bool modActive = on (modOn);
         const int mode = (int) p (modMode);
-        if (modActive || (mode != st::Modulator::vibrato && mod.getDepth() > 0.001f))
-            mod.process (data, numCh, n, mode, syncedRate (bpm), modActive ? p (depth) : 0.0f, p (shape), p (rise),
-                         onsetBlock.getReadPointer (0));
+        // Плавне вмикання/вимикання для всіх режимів (у вібрато — без стрибка затримки і клацання)
+        sn::runFaded (modMix, modActive, data, numCh, n, std::min (1.0f, (float) n / (float) (0.02 * fs)), scratch, [&] (bool fresh)
+        {
+            if (fresh) mod.reset();
+            mod.process (data, numCh, n, mode, syncedRate (bpm), p (depth), p (shape), p (rise), onsetBlock.getReadPointer (0));
+        });
         lfoView.store (modActive ? mod.getLfo() : 0.0f);
     }
 

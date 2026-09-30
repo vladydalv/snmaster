@@ -47,12 +47,12 @@ public:
     std::atomic<float> matchDb { 0.0f }, pushDb { 0.0f };
 
 private:
-    float p (const char* id) const { return params.at (id)->load (std::memory_order_relaxed); }
+    float p (const char* id) const noexcept { return params.get (id); }
     void processChunk (juce::AudioBuffer<float>&);
     void updateFilters (const era::Settings& s, bool force);
     void measureTruePeak (const juce::AudioBuffer<float>&, int numCh, int n);
 
-    std::map<juce::String, std::atomic<float>*> params;
+    sn::ParamCache params;
     std::atomic<int> currentPreset { 0 };
     int maxBlock = 512;
     double fs = 44100.0, osFs = 176400.0;

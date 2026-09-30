@@ -245,40 +245,43 @@ StompContent::StompContent (SpacenerdStompProcessor& p)
 {
     auto& s = p.apvts;
 
-    drive.knob (s, circuit, "Circuit");
-    drive.knob (s, gain, "Gain");
-    drive.knob (s, tone, "Tone", true);
-    drive.knob (s, battery, "Battery");
-    drive.knob (s, cleanBass, "Clean Bass");
-    drive.knob (s, level, "Level", true);
+    drive.knob (s, circuit, "Circuit").help ("morphs smoothly between pedal circuits of different eras (same as left-right on the display)");
+    drive.knob (s, gain, "Gain").help ("amount of drive/fuzz (same as up-down on the display)");
+    drive.knob (s, tone, "Tone", true).help ("- = darker, + = brighter");
+    drive.knob (s, battery, "Battery").help ("a dying 9V battery: sag, splatter, note tails break up");
+    drive.knob (s, cleanBass, "Clean Bass").help ("lows below this frequency bypass the drive (for bass: fuzz on top, solid clean low end)");
+    drive.knob (s, level, "Level", true).help ("pedal output level");
 
     octSec.add (std::make_unique<Segmented> (s, octEngine, "Engine"), 4, 44);
     octSec.add (std::make_unique<Segmented> (s, octPos, "Position"), 2, 44);
-    trackView = static_cast<TrackView*> (&octSec.add (std::make_unique<TrackView> (p), 3, 44));
+    trackView = static_cast<TrackView*> (&octSec.add (std::make_unique<TrackView> (p), 2, 44));
+    auto wr = std::make_unique<LabeledCombo> (s, wobRate, "Wobble Rate");
+    wr->setTooltip ("Wobble speed, locked to the song tempo");
+    octSec.add (std::move (wr), 1, 44);
     // Порядок голосів — як на поліфонічних октаверах: сухий, −2, −1, +1, +2
-    octSec.knob (s, octDry, "Dry");
+    octSec.knob (s, octDry, "Dry").help ("your original signal");
     octSec.knob (s, sub2, "Sub -2");
     octSec.knob (s, sub1, "Sub -1");
     octSec.knob (s, octUp, "Up +1");
     octSec.knob (s, octUp2, "Up +2");
-    octSec.knob (s, octTone, "Tone");
-    octSec.knob (s, bloom, "Bloom");
-    octSec.knob (s, detune, "Detune");
-    octSec.knob (s, wobble, "Wobble");
+    octSec.knob (s, octTone, "Tone").help ("low-pass filter on the octave voices");
+    octSec.knob (s, bloom, "Bloom").help ("octaves swell in after each note (like the Attack on polyphonic octave pedals)");
+    octSec.knob (s, detune, "Detune").help ("Spectral engine: two slightly detuned copies of +1/+2 for a 12-string / organ width");
+    octSec.knob (s, wobble, "Wobble").help ("resonant filter on the octaves moving in tempo (see Wobble Rate)");
 
     // 8 колонок: режими ширші (назви не обрізаються), ручки — по 2 колонки
     modSec.add (std::make_unique<Segmented> (s, modMode, "Mode"), 5, 44);
     modSec.add (std::make_unique<Segmented> (s, modSync, "Sync"), 3, 44);
     modSec.add (std::make_unique<Knob> (s, rate, "Rate"), 2);
     modSec.add (std::make_unique<Knob> (s, depth, "Depth"), 2);
-    modSec.add (std::make_unique<Knob> (s, shape, "Shape"), 2);
-    modSec.add (std::make_unique<Knob> (s, rise, "Rise"), 2);
+    { auto k = std::make_unique<Knob> (s, shape, "Shape"); k->help ("smooth sine to choppy square"); modSec.add (std::move (k), 2); }
+    { auto k = std::make_unique<Knob> (s, rise, "Rise"); k->help ("modulation fades in after each note, like a singer's vibrato"); modSec.add (std::move (k), 2); }
 
     echoSec.add (std::make_unique<Segmented> (s, echoSync, "Sync"), 5, 44);
     echoSec.knob (s, echoTime, "Time");
-    echoSec.knob (s, feedback, "Repeats");
+    echoSec.knob (s, feedback, "Repeats").help ("number of repeats; near max it self-oscillates");
     echoSec.knob (s, echoTone, "Tone");
-    echoSec.knob (s, wear, "Wear");
+    echoSec.knob (s, wear, "Wear").help ("worn tape: pitch wobble and saturation in the repeats");
     echoSec.knob (s, echoMix, "Mix");
 
     for (auto* c : std::initializer_list<Component*> { &presetBox, &pad, &drive, &octSec, &modSec, &echoSec, &output })

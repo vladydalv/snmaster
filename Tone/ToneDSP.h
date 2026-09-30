@@ -128,6 +128,7 @@ public:
     {
         fs = sampleRate;
         band.assign ((size_t) numChannels, {});
+        shelf.assign ((size_t) numChannels, {});
         det.reset();
         auto c = [this] (double ms) { return (float) std::exp (-1.0 / (0.001 * ms * fs)); };
         envAtk = c (0.5); envRel = c (40.0); gAtk = c (1.0); gRel = c (60.0);
@@ -138,8 +139,9 @@ public:
     void reset()
     {
         for (auto& b : band) b.reset();
+        for (auto& f : shelf) { f.reset(); f.setBypass(); }
         det.reset();
-        eBand = eFull = 0.0f; grDb = 0.0f;
+        eBand = eFull = 0.0f; grDb = 0.0f; shelfDb = 0.0f;
     }
 
     /** Повертає максимальне ослаблення (дБ) за блок. */
@@ -179,17 +181,27 @@ public:
             grDb = target > grDb ? target + gAtk * (grDb - target) : target + gRel * (grDb - target);
             maxGr = std::max (maxGr, grDb);
 
-            const float keep = 1.0f - dbToGain (-grDb);
+            // Динамічний high-shelf: у спокої (0 дБ) повністю прозорий, без підйому біля частоти розділу
+            if ((i & 15) == 0 && std::abs (grDb - shelfDb) > 0.05f)
+            {
+                shelfDb = grDb;
+                Biquad sh; sh.setHighShelf (fs, freq, 0.707, -shelfDb);
+                for (auto& f : shelf) f.copyCoeffs (sh);
+            }
             for (int c = 0; c < numCh && c < 2; ++c)
-                data[c][i] = listen ? hb[c] : data[c][i] - hb[c] * keep;
+            {
+                const float y = shelf[(size_t) c].process (data[c][i]);
+                data[c][i] = listen ? hb[c] : y;
+            }
         }
         return maxGr;
     }
 
 private:
     double fs = 48000.0;
-    std::vector<Biquad> band;
+    std::vector<Biquad> band, shelf;
     Biquad det;
+    float shelfDb = 0.0f;
     float envAtk = 0, envRel = 0, gAtk = 0, gRel = 0;
     float eBand = 0, eFull = 0, grDb = 0, lastFreq = -1.0f;
 };

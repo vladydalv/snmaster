@@ -2,6 +2,8 @@
 
 #include "../Common/SNCommon.h"
 #include "../Common/PitchDetector.h"
+#include <map>
+#include <mutex>
 
 /*  Stomp: педаль з плавним морфом схем, модуляція і плівкове ехо.
     Схеми — узагальнення характеру класичних типів педалей і підсилювачів (не копії конкретних виробів). */
@@ -184,6 +186,20 @@ private:
 
     /** Нормування гучності: на -18 dBFS вихід ≈ вхід для кожної схеми/гейну (перемикання не стрибає). */
     void calibrate()
+    {
+        // Результат залежить лише від частоти дискретизації — рахуємо один раз (швидкий prepare у Logic)
+        static std::mutex cacheLock;
+        static std::map<double, std::array<std::array<float, 5>, 9>> cache;
+        {
+            const std::lock_guard<std::mutex> lock (cacheLock);
+            if (auto it = cache.find (fs); it != cache.end()) { normTable = it->second; return; }
+        }
+        calibrateNow();
+        const std::lock_guard<std::mutex> lock (cacheLock);
+        cache[fs] = normTable;
+    }
+
+    void calibrateNow()
     {
         for (int ci = 0; ci <= 8; ++ci)
             for (int gi = 0; gi <= 4; ++gi)
@@ -798,7 +814,7 @@ private:
     // Vintage: аналізатор → тригер → дільники → перемикання полярності в нулях сигналу
     void runVintage (float xh, float xm, float* out) noexcept
     {
-        ++since;
+        if (since < (1 << 30)) ++since;
         if (f0 > 0.0)
         {
             const float a = an2.process (an1.process (xh));      // аналізатор: ФНЧ трохи вище основної
@@ -983,6 +999,19 @@ private:
 
     /** Нормування на гітароподібних тонах: кожен голос кожного двигуна на 100 % звучить так само голосно, як вхід. */
     void calibrate()
+    {
+        static std::mutex cacheLock;
+        static std::map<double, std::array<float, kEng * kV>> cache;
+        {
+            const std::lock_guard<std::mutex> lock (cacheLock);
+            if (auto it = cache.find (fs); it != cache.end()) { norm = it->second; return; }
+        }
+        calibrateNow();
+        const std::lock_guard<std::mutex> lock (cacheLock);
+        cache[fs] = norm;
+    }
+
+    void calibrateNow()
     {
         std::array<double, kEng * kV> e {};
         double inE = 0.0;

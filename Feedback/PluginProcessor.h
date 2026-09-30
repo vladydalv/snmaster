@@ -40,9 +40,9 @@ public:
     sn::AtomicMax outPeak;
 
 private:
-    float p (const char* id) const { return params.at (id)->load (std::memory_order_relaxed); }
+    float p (const char* id) const noexcept { return params.get (id); }
 
-    std::map<juce::String, std::atomic<float>*> params;
+    sn::ParamCache params;
     std::atomic<int> currentPreset { 0 };
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> outGainSm;
 

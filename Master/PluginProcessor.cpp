@@ -11,7 +11,8 @@ SpacenerdMasterProcessor::SpacenerdMasterProcessor()
 {
     for (auto* param : getParameters())
         if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param))
-            params[ranged->getParameterID()] = apvts.getRawParameterValue (ranged->getParameterID());
+            params.add (ranged->getParameterID(), apvts.getRawParameterValue (ranged->getParameterID()));
+    startTimerHz (30);
 }
 
 bool SpacenerdMasterProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -78,6 +79,10 @@ void SpacenerdMasterProcessor::prepareToPlay (double sampleRate, int samplesPerB
 
     loudness.prepare (fs, numCh);
     inLoudness.prepare (fs, numCh);
+    analysis.prepare (fs);
+    osDry.setSize (numCh, samplesPerBlock * factor);
+    firstBlock = true;
+    clipPrevX.fill (0.0f); clipPrevF.fill (0.0f);
 
     for (auto* sm : { &inGainSm, &outGainSm, &limGainSm, &matchSm })
         sm->reset (fs, 0.03);
@@ -122,6 +127,48 @@ void SpacenerdMasterProcessor::updateEq (bool force)
         chain[0].copyCoeffs (hp); chain[1].copyCoeffs (lo);
         chain[2].copyCoeffs (mid); chain[3].copyCoeffs (hi);
     }
+}
+
+template <typename Fn>
+void SpacenerdMasterProcessor::runFaded (float& mix, bool target, float* const* os, int numCh, int n, Fn&& fn)
+{
+    const float t = target ? 1.0f : 0.0f;
+    if (mix <= 0.0f && ! target) return;
+    const float m0 = mix;
+    const float step = std::min (1.0f, (float) (n / (1 << kOsOrder)) / (float) (0.02 * fs));   // ≈ 20 мс
+    const float m1 = std::abs (t - mix) <= step ? t : mix + (t > mix ? step : -step);
+    mix = m1;
+    if (m0 >= 1.0f && m1 >= 1.0f) { fn (false); return; }
+
+    for (int ch = 0; ch < numCh; ++ch) std::copy_n (os[ch], n, osDry.getWritePointer (ch));
+    fn (m0 <= 0.0f);
+    for (int ch = 0; ch < numCh; ++ch)
+    {
+        const float* dry = osDry.getReadPointer (ch);
+        for (int i = 0; i < n; ++i)
+        {
+            const float k = m0 + (m1 - m0) * (float) i / (float) n;
+            os[ch][i] = k * os[ch][i] + (1.0f - k) * dry[i];
+        }
+    }
+}
+
+/** М'який кліпер T·tanh(x/T) з антиаліасингом ADAA-1: y = (F(x) − F(x₁)) / (x − x₁), F = T²·ln cosh(x/T). */
+float SpacenerdMasterProcessor::clipSample (float x, float& prevX, float& prevF, float T) const noexcept
+{
+    auto F = [T] (float v)
+    {
+        const float a = std::abs (v / T);
+        // ln cosh(a) без переповнення: a + ln(1 + e^(−2a)) − ln 2
+        return T * T * (a + std::log1p (std::exp (-2.0f * a)) - 0.69314718f);
+    };
+    const float fx = F (x);
+    const float dx = x - prevX;
+    float y;
+    if (std::abs (dx) < 1.0e-5f) y = T * std::tanh (0.5f * (x + prevX) / T);
+    else y = (fx - prevF) / dx;
+    prevX = x; prevF = fx;
+    return y;
 }
 
 void SpacenerdMasterProcessor::measureTruePeak (juce::dsp::Oversampling<float>& os, const juce::AudioBuffer<float>& buffer,
@@ -176,15 +223,32 @@ void SpacenerdMasterProcessor::processChunk (juce::AudioBuffer<float>& buffer)
         inPeak[(size_t) ch].push (buffer.getMagnitude (ch, 0, n));
     inFifo.push (buffer.getReadPointer (0), numCh > 1 ? buffer.getReadPointer (1) : nullptr, n);
 
-    // --- 4x: EQ → компресор → сатурація
+    // Повільно згладжені ручки (≈ 50 мс): без сходинок при автоматизації
+    const float kSm = std::min (1.0f, (float) n / (float) (0.05 * fs));
+    auto smooth = [&] (float& v, float t) { v += (t - v) * kSm; };
+    if (firstBlock)
+    {
+        makeupSm = p (ParamIDs::makeup); compWetSm = p (ParamIDs::compMix) * 0.01f; driveSm = p (ParamIDs::drive);
+        satWetSm = p (ParamIDs::satMix) * 0.01f; ceilingSm = p (ParamIDs::ceiling); clipSm = p (ParamIDs::clip) * 0.01f;
+        eqMix = on (ParamIDs::eqOn) ? 1.0f : 0.0f; compMixF = on (ParamIDs::compOn) ? 1.0f : 0.0f;
+        satMixF = on (ParamIDs::satOn) ? 1.0f : 0.0f; widthMix = on (ParamIDs::widthOn) ? 1.0f : 0.0f;
+        limMix = on (ParamIDs::limOn) ? 1.0f : 0.0f;
+        firstBlock = false;
+    }
+    smooth (makeupSm, p (ParamIDs::makeup)); smooth (compWetSm, p (ParamIDs::compMix) * 0.01f);
+    smooth (driveSm, p (ParamIDs::drive));   smooth (satWetSm, p (ParamIDs::satMix) * 0.01f);
+    smooth (ceilingSm, p (ParamIDs::ceiling)); smooth (clipSm, p (ParamIDs::clip) * 0.01f);
+
+    // --- 4x: EQ → компресор → сатурація (кожен модуль вмикається/вимикається плавно)
     {
         juce::dsp::AudioBlock<float> block (buffer.getArrayOfWritePointers(), (size_t) numCh, (size_t) n);
         auto up = oversampler->processSamplesUp (block);
         const int on_ = (int) up.getNumSamples();
         float* osData[2] = { up.getChannelPointer (0), numCh > 1 ? up.getChannelPointer (1) : nullptr };
 
-        if (on (ParamIDs::eqOn))
+        runFaded (eqMix, on (ParamIDs::eqOn), osData, numCh, on_, [&] (bool fresh)
         {
+            if (fresh) { for (auto& chain : eq) for (auto& f : chain) f.reset(); }
             constexpr int sub = 32;
             for (int start = 0; start < on_; start += sub)
             {
@@ -202,59 +266,90 @@ void SpacenerdMasterProcessor::processChunk (juce::AudioBuffer<float>& buffer)
                     }
                 }
             }
-        }
+        });
 
-        if (on (ParamIDs::compOn))
+        float gr = 0.0f;
+        runFaded (compMixF, on (ParamIDs::compOn), osData, numCh, on_, [&] (bool fresh)
         {
-            const Compressor::Settings s {
+            if (fresh) comp.reset();
+            const Compressor::Settings cs {
                 p (ParamIDs::threshold), p (ParamIDs::ratio), p (ParamIDs::attack), p (ParamIDs::release),
-                p (ParamIDs::knee), p (ParamIDs::scHpf), p (ParamIDs::makeup), p (ParamIDs::compMix) * 0.01f,
-                on (ParamIDs::compAuto) };
-            compGr.push (comp.process (osData, numCh, on_, s));
-        }
+                p (ParamIDs::knee), p (ParamIDs::scHpf), makeupSm, compWetSm, on (ParamIDs::compAuto) };
+            gr = comp.process (osData, numCh, on_, cs);
+        });
+        compGr.push (gr * compMixF);
 
-        if (on (ParamIDs::satOn))
+        runFaded (satMixF, on (ParamIDs::satOn), osData, numCh, on_, [&] (bool fresh)
         {
-            const float drive = p (ParamIDs::drive), mix = p (ParamIDs::satMix) * 0.01f;
+            if (fresh) { tube.reset(); tape.reset(); }
             switch ((int) p (ParamIDs::satType))
             {
                 // Усі типи відкалібровані на -6 dBFS: перемикання не стрибає гучністю
-                case 0:  tube.process (up, drive, 40.0f, mix); break;
-                case 1:  tape.process (up, drive, sn::TapeStage::ips30, mix); break;
-                default: sn::SoftClip::process (up, drive, mix, kSatRef); break;
+                case 0:  tube.process (up, driveSm, 40.0f, satWetSm); break;
+                case 1:  tape.process (up, driveSm, sn::TapeStage::ips30, satWetSm); break;
+                default: sn::SoftClip::process (up, driveSm, satWetSm, kSatRef); break;
             }
-        }
+        });
 
         oversampler->processSamplesDown (block);
     }
 
-    // --- Ширина стерео (M/S) і моно-баси
-    if (numCh == 2 && on (ParamIDs::widthOn))
+    // --- Ширина стерео (M/S) і моно-баси (плавне вмикання)
     {
-        widthSm.setTargetValue (p (ParamIDs::width) * 0.01f);
-        const float monoHz = p (ParamIDs::monoBass);
-        const bool mono = monoHz >= 20.0f;
-        if (mono) sideHpf.setCutoffFrequency (monoHz);
-
-        auto* l = buffer.getWritePointer (0);
-        auto* r = buffer.getWritePointer (1);
-        for (int i = 0; i < n; ++i)
+        const float wT = on (ParamIDs::widthOn) ? 1.0f : 0.0f;
+        const float w0 = widthMix;
+        widthMix = std::abs (wT - widthMix) < kSm ? wT : widthMix + (wT > widthMix ? kSm : -kSm);
+        if (numCh == 2 && (w0 > 0.0f || wT > 0.0f))
         {
-            const float m = 0.5f * (l[i] + r[i]);
-            float s = 0.5f * (l[i] - r[i]) * widthSm.getNextValue();
-            if (mono) s = sideHpf.processSample (0, s);
-            l[i] = m + s;
-            r[i] = m - s;
+            if (w0 <= 0.0f) sideHpf.reset();
+            widthSm.setTargetValue (p (ParamIDs::width) * 0.01f);
+            const float monoHz = p (ParamIDs::monoBass);
+            const bool mono = monoHz >= 20.0f;
+            if (mono) sideHpf.setCutoffFrequency (monoHz);
+
+            auto* l = buffer.getWritePointer (0);
+            auto* r = buffer.getWritePointer (1);
+            for (int i = 0; i < n; ++i)
+            {
+                const float m = 0.5f * (l[i] + r[i]);
+                const float sIn = 0.5f * (l[i] - r[i]);
+                float s = sIn * widthSm.getNextValue();
+                if (mono) s = sideHpf.processSample (0, s);
+                const float k = w0 + (widthMix - w0) * (float) i / (float) n;
+                const float sOut = k * s + (1.0f - k) * sIn;
+                l[i] = m + sOut;
+                r[i] = m - sOut;
+            }
         }
     }
 
-    // --- Лімітер: драйв, детекція true peak, lookahead
+    // --- Лімітер: драйв → м'який кліпер (зрізає короткі піки, лімітеру менше роботи) → true-peak lookahead
     const bool limActive = on (ParamIDs::limOn);
+    const float lT = limActive ? 1.0f : 0.0f, l0 = limMix;
+    limMix = std::abs (lT - limMix) < kSm ? lT : limMix + (lT > limMix ? kSm : -kSm);
     limGainSm.setTargetValue (dbToGain (limActive ? p (ParamIDs::limGain) : 0.0f));
     limGainSm.applyGain (buffer, n);
+
+    const float ceilLin = dbToGain (ceilingSm);
+    if (clipSm > 0.001f && limMix > 0.0f)
+    {
+        // Поріг: від +3 дБ над стелею (Clip 0 %) до −2 дБ під нею (Clip 100 %)
+        const float T = ceilLin * dbToGain (3.0f - 5.0f * clipSm);
+        for (int ch = 0; ch < numCh; ++ch)
+        {
+            auto* d = buffer.getWritePointer (ch);
+            for (int i = 0; i < n; ++i)
+            {
+                const float y = clipSample (d[i], clipPrevX[(size_t) ch], clipPrevF[(size_t) ch], T);
+                d[i] = limMix * y + (1.0f - limMix) * d[i];
+            }
+        }
+    }
+    else { clipPrevX.fill (0.0f); clipPrevF.fill (0.0f); }
+
     measureTruePeak (*tpDetector, buffer, numCh, n, peakBuf.data());
     const float minG = limiter.process (buffer.getArrayOfWritePointers(), numCh, n, peakBuf.data(),
-                                        dbToGain (p (ParamIDs::ceiling)), p (ParamIDs::limRel), limActive);
+                                        ceilLin, p (ParamIDs::limRel), l0, limMix);
     limGr.push (-gainToDb (minG));
 
     // --- Вихід
@@ -298,7 +393,8 @@ void SpacenerdMasterProcessor::setCurrentProgram (int index)
     {
         auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param);
         const auto pid = ranged != nullptr ? ranged->getParameterID() : juce::String();
-        if (ranged == nullptr || pid == ParamIDs::gainMatch || pid == ParamIDs::targetGenre || pid == ParamIDs::targetDecade)
+        if (ranged == nullptr || pid == ParamIDs::gainMatch || pid == ParamIDs::targetGenre || pid == ParamIDs::targetDecade
+            || pid == ParamIDs::loudTarget)
             continue;   // моніторинг і ціль аналізатора — не частина звуку пресету
 
         float value = ranged->getDefaultValue();

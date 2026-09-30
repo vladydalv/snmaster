@@ -16,6 +16,8 @@ public:
     Knob (APVTS& state, const juce::String& paramId, const juce::String& title,
           bool bipolar = false, juce::Colour colour = Theme::accent);
     void resized() override;
+    /** Підказка при наведенні: що робить ручка (а не лише її назва). */
+    Knob& help (const juce::String& text);
 
 private:
     juce::Label label;

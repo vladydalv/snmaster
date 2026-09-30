@@ -116,36 +116,38 @@ MainContent::MainContent (SpacenerdMasterProcessor& p)
 {
     auto& s = p.apvts;
 
-    eq.knob (s, ParamIDs::hpfFreq,  "Low Cut");
-    eq.knob (s, ParamIDs::lowFreq,  "Low");
-    eq.knob (s, ParamIDs::midFreq,  "Mid");
-    eq.knob (s, ParamIDs::highFreq, "High");
-    eq.knob (s, ParamIDs::midQ,     "Mid Q");
+    // Частоти над своїми підсиленнями
+    eq.knob (s, ParamIDs::lowFreq,  "Low Freq").help ("corner of the low shelf");
+    eq.knob (s, ParamIDs::midFreq,  "Mid Freq").help ("centre of the mid bell");
+    eq.knob (s, ParamIDs::highFreq, "High Freq").help ("corner of the high shelf");
+    eq.knob (s, ParamIDs::hpfFreq,  "Low Cut").help ("removes rumble below this frequency (Off = full range)");
     eq.knob (s, ParamIDs::lowGain,  "Low Gain",  true);
     eq.knob (s, ParamIDs::midGain,  "Mid Gain",  true);
     eq.knob (s, ParamIDs::highGain, "High Gain", true);
+    eq.knob (s, ParamIDs::midQ,     "Mid Q").help ("width of the mid bell: low = broad, high = narrow");
 
-    comp.knob (s, ParamIDs::threshold, "Threshold");
-    comp.knob (s, ParamIDs::ratio,     "Ratio");
-    comp.knob (s, ParamIDs::attack,    "Attack");
-    comp.knob (s, ParamIDs::release,   "Release");
-    comp.knob (s, ParamIDs::knee,      "Knee");
-    comp.knob (s, ParamIDs::scHpf,     "SC Filter");
-    comp.knob (s, ParamIDs::makeup,    "Makeup");
-    comp.knob (s, ParamIDs::compMix,   "Mix");
+    comp.knob (s, ParamIDs::threshold, "Threshold").help ("level where compression starts");
+    comp.knob (s, ParamIDs::ratio,     "Ratio").help ("how strongly levels above the threshold are reduced; 2:1 is gentle glue");
+    comp.knob (s, ParamIDs::attack,    "Attack").help ("longer = more drum punch passes through");
+    comp.knob (s, ParamIDs::release,   "Release").help ("how fast it lets go; too short pumps, too long squashes");
+    comp.knob (s, ParamIDs::knee,      "Knee").help ("softness of the compression onset");
+    comp.knob (s, ParamIDs::scHpf,     "SC Filter").help ("bass below this does not trigger compression (less pumping from kick/bass)");
+    comp.knob (s, ParamIDs::makeup,    "Makeup").help ("level added after compression");
+    comp.knob (s, ParamIDs::compMix,   "Mix").help ("parallel compression: blend of dry and compressed");
     comp.add (std::make_unique<Component>(), 3, 26);
     comp.add (std::make_unique<PillToggle> (s, ParamIDs::compAuto, "AUTO REL"), 1, 24);
 
     sat.add (std::make_unique<Segmented> (s, ParamIDs::satType), 2, 34);
-    sat.knob (s, ParamIDs::drive,  "Drive");
+    sat.knob (s, ParamIDs::drive,  "Drive").help ("amount of harmonic colour; level stays the same");
     sat.knob (s, ParamIDs::satMix, "Mix");
 
     width.knob (s, ParamIDs::width,    "Width", true);
-    width.knob (s, ParamIDs::monoBass, "Mono Bass");
+    width.knob (s, ParamIDs::monoBass, "Mono Bass").help ("bass below this frequency is made mono (tight, vinyl/club safe)");
 
-    lim.knob (s, ParamIDs::limGain, "Gain");
-    lim.knob (s, ParamIDs::ceiling, "Ceiling");
-    lim.knob (s, ParamIDs::limRel,  "Release");
+    lim.knob (s, ParamIDs::limGain, "Drive").help ("pushes the mix into the limiter = louder. ASSIST sets it for the streaming target");
+    lim.knob (s, ParamIDs::ceiling, "Ceiling").help ("maximum true peak; keep -1 dB for streaming");
+    lim.knob (s, ParamIDs::clip,    "Clip").help ("soft clipper before the limiter: shaves short drum peaks so the limiter works less (more punch at the same loudness)");
+    lim.knob (s, ParamIDs::limRel,  "Release").help ("limiter recovery time");
 
     matchButton.setTooltip ("Gain Match: output level follows input loudness, so Bypass compares at equal loudness. Turn off before bouncing.");
 

@@ -140,12 +140,12 @@ FeedbackContent::FeedbackContent (SpacenerdFeedbackProcessor& p)
     trig.add (std::make_unique<LabeledCombo> (s, openStr, "String"), 1, 42);
 
     harm.add (std::make_unique<Segmented> (s, harmonic), 2, 34);
-    harm.knob (s, tone,  "Tone");
-    harm.knob (s, drift, "Drift");
+    harm.knob (s, tone,  "Tone").help ("brightness of the feedback");
+    harm.knob (s, drift, "Drift").help ("slow pitch/level wander, like a real amp swell");
 
-    cab.knob (s, distance, "Distance");
-    cab.knob (s, amount,   "Amount");
-    cab.knob (s, morph,    "Morph");
+    cab.knob (s, distance, "Distance").help ("how far you stand from the cabinet: near = fast, bright; far = slow bloom");
+    cab.knob (s, amount,   "Amount").help ("feedback level");
+    cab.knob (s, morph,    "Morph").help ("how gradually the note turns into feedback");
 
     for (auto* c : std::initializer_list<Component*> { &presetBox, &trig, &harm, &cab, &status })
         addAndMakeVisible (c);

@@ -45,10 +45,10 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createFeedbackLayout(
     AudioProcessorValueTreeState::ParameterLayout l;
     auto id = [] (const char* s) { return ParameterID { s, 1 }; };
 
-    l.add (std::make_unique<AudioParameterChoice> (id (trigger), "Trigger", StringArray { "Auto", "Hold", "Both" }, 0));
+    l.add (std::make_unique<AudioParameterChoice> (id (trigger), "Trigger", StringArray { "Auto", "Button", "Both" }, 0));
     l.add (std::make_unique<AudioParameterBool> (id (hold), "Hold", false));
     l.add (std::make_unique<F> (id (delay),    "Delay",    skew (0.2f, 5.0f, 1.2f), 1.2f, sec));
-    l.add (std::make_unique<AudioParameterChoice> (id (harmonic), "Harmonic", StringArray { "Tone", "Octave", "Fifth", "Auto" }, 3));
+    l.add (std::make_unique<AudioParameterChoice> (id (harmonic), "Harmonic", StringArray { "Root", "Octave", "Fifth", "Auto" }, 3));
     l.add (std::make_unique<F> (id (distance), "Distance", lin (0.0f, 100.0f), 40.0f, dist));
     l.add (std::make_unique<F> (id (amount),   "Amount",   lin (0.0f, 100.0f), 70.0f, pct));
     l.add (std::make_unique<F> (id (morph),    "Morph",    lin (0.0f, 100.0f), 50.0f, pct));

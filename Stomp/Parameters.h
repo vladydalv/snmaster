@@ -24,6 +24,7 @@ namespace StompIDs
     inline constexpr auto octEngine = "octEngine";  // Poly / Vintage / Mono HQ
     inline constexpr auto octTone   = "octTone";
     inline constexpr auto bloom     = "bloom";      // октави наростають після атаки
+    inline constexpr auto wobRate   = "wobRate";    // темп Wobble (ділення такту)
     inline constexpr auto wobble    = "wobble";     // фільтр на октавах, що «гуляє» з LFO модуляції
     // Modulation
     inline constexpr auto modOn     = "modOn";
@@ -58,7 +59,11 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createStompLayout()
     auto skew = [] (float lo, float hi, float c) { NormalisableRange<float> r (lo, hi); r.setSkewForCentre (c); return r; };
     const auto pct = A().withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v)) + " %"; }).withLabel ("%");
     const auto dB  = A().withStringFromValueFunction ([] (float v, int) { return String (v, 1) + " dB"; }).withLabel ("dB");
-    const auto hz  = A().withStringFromValueFunction ([] (float v, int) { return v < 1.0f ? String (v, 2) + " Hz" : String (v, 1) + " Hz"; }).withLabel ("Hz");
+    const auto hz  = A().withStringFromValueFunction ([] (float v, int)
+    {
+        return v >= 1000.0f ? String (v / 1000.0f, v >= 10000.0f ? 1 : 2) + " kHz" : v < 1.0f ? String (v, 2) + " Hz" : v < 100.0f ? String (v, 1) + " Hz" : String (roundToInt (v)) + " Hz";
+    }).withLabel ("Hz");
+    const auto sgn = A().withStringFromValueFunction ([] (float v, int) { return (v > 0.5f ? "+" : "") + String (roundToInt (v)) + " %"; }).withLabel ("%");
     const auto ms  = A().withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v)) + " ms"; }).withLabel ("ms");
     const auto circuitText = A().withStringFromValueFunction ([] (float v, int)
     {
@@ -75,7 +80,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createStompLayout()
     l.add (std::make_unique<B> (id (driveOn), "Drive On", true));
     l.add (std::make_unique<F> (id (circuit), "Circuit", lin (0.0f, 4.0f), 2.0f, circuitText));
     l.add (std::make_unique<F> (id (gain),    "Gain",    lin (0.0f, 100.0f), 60.0f, pct));
-    l.add (std::make_unique<F> (id (tone),    "Tone",    lin (-100.0f, 100.0f), 0.0f, pct));
+    l.add (std::make_unique<F> (id (tone),    "Tone",    lin (-100.0f, 100.0f), 0.0f, sgn));
     l.add (std::make_unique<F> (id (battery), "Battery", lin (0.0f, 100.0f), 0.0f, pct));
     l.add (std::make_unique<F> (id (cleanBass), "Clean Bass", skew (40.0f, 400.0f, 120.0f), 40.0f, bassText));
     l.add (std::make_unique<F> (id (level),   "Level",   lin (-24.0f, 12.0f), 0.0f, dB));
@@ -94,6 +99,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createStompLayout()
     l.add (std::make_unique<F> (id (octTone), "Octave Tone", skew (150.0f, 8000.0f, 1500.0f), 2500.0f, hz));
     l.add (std::make_unique<F> (id (bloom),  "Bloom",    skew (0.0f, 2000.0f, 300.0f), 0.0f, ms));
     l.add (std::make_unique<F> (id (wobble), "Wobble",   lin (0.0f, 100.0f), 0.0f, pct));
+    l.add (std::make_unique<C> (id (wobRate), "Wobble Rate", StringArray { "1/2", "1/4", "1/8", "1/8T", "1/16", "1/32" }, 2));
 
     l.add (std::make_unique<B> (id (modOn), "Mod On", false));
     l.add (std::make_unique<C> (id (modMode), "Mod Mode", StringArray { "Tremolo", "Harmonic", "Pan", "Vibrato" }, 0));

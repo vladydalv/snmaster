@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(Spacenerd VERSION 0.2.0)
+# Кожна збірка в CI отримує свою версію: Logic не тримає старий кеш AU
+if(DEFINED ENV{GITHUB_RUN_NUMBER})
+    set(SN_VERSION 0.3.$ENV{GITHUB_RUN_NUMBER})
+else()
+    set(SN_VERSION 0.3.0)
+endif()
+project(Spacenerd VERSION ${SN_VERSION})
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

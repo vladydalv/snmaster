@@ -5,12 +5,13 @@
 #include "Parameters.h"
 #include "MasterDSP.h"
 #include "Presets.h"
+#include "TrackAnalysis.h"
 
-class SpacenerdMasterProcessor final : public juce::AudioProcessor
+class SpacenerdMasterProcessor final : public juce::AudioProcessor, private juce::Timer
 {
 public:
     SpacenerdMasterProcessor();
-    ~SpacenerdMasterProcessor() override = default;
+    ~SpacenerdMasterProcessor() override { stopTimer(); }
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -47,16 +48,21 @@ public:
     sn::LoudnessMeter loudness, inLoudness;
     std::atomic<float> truePeakMax { 0.0f };   // лінійний, від останнього скидання
     std::atomic<float> matchDb { 0.0f };        // поточна корекція Gain Match
-    sn::StereoFifo inFifo, outFifo;             // для аналізатора в інтерфейсі
+    sn::StereoFifo inFifo, outFifo;             // для аналізатора
+    TrackAnalysis analysis { apvts, inFifo, outFifo, loudness, inLoudness };   // живе тут: не губиться, коли вікно закрите
 
 private:
-    float p (const char* id) const { return params.at (id)->load (std::memory_order_relaxed); }
+    void timerCallback() override { analysis.tick(); }
+    float p (const char* id) const noexcept { return params.get (id); }
+    /** Плавне вмикання/вимикання модуля в 4x-домені (без клацань). */
+    template <typename Fn> void runFaded (float& mix, bool target, float* const* os, int numCh, int n, Fn&& fn);
+    float clipSample (float x, float& prevX, float& prevF, float T) const noexcept;
     bool on (const char* id) const { return p (id) > 0.5f; }
     void updateEq (bool force);
     void processChunk (juce::AudioBuffer<float>&);
     void measureTruePeak (juce::dsp::Oversampling<float>&, const juce::AudioBuffer<float>&, int numCh, int n, float* dest);
 
-    std::map<juce::String, std::atomic<float>*> params;
+    sn::ParamCache params;
     std::atomic<int> currentPreset { 0 };
     std::atomic<bool> tpMaxReset { false };
     int maxBlock = 512;
@@ -77,6 +83,14 @@ private:
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> inGainSm, outGainSm, limGainSm, matchSm;
     juce::SmoothedValue<float> widthSm;
     float matchState = 0.0f;
+
+    // Плавні перемикачі модулів (0…1) і повільно згладжені ручки (оновлюються щоблоку)
+    float eqMix = 1.0f, compMixF = 1.0f, satMixF = 0.0f, widthMix = 1.0f, limMix = 1.0f;
+    float makeupSm = 0.0f, compWetSm = 1.0f, driveSm = 25.0f, satWetSm = 1.0f, ceilingSm = -1.0f, clipSm = 0.0f;
+    bool firstBlock = true;
+    juce::AudioBuffer<float> osDry;
+    // Кліпер (ADAA 1-го порядку): стан по каналах
+    std::array<float, 2> clipPrevX {}, clipPrevF {};
 
     double fs = 44100.0, osFs = 176400.0;
     static constexpr int kOsOrder = 2; // 2^2 = 4x

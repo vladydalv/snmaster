@@ -18,181 +18,51 @@ String mmss (double s)
 }
 
 AnalyzerPanel::AnalyzerPanel (SpacenerdMasterProcessor& p)
-    : proc (p),
+    : proc (p), ta (p.analysis),
       genreSel (p.apvts, ParamIDs::targetGenre),
-      decadeSel (p.apvts, ParamIDs::targetDecade, "Decade")
+      decadeSel (p.apvts, ParamIDs::targetDecade, "Decade"),
+      loudSel (p.apvts, ParamIDs::loudTarget, "Release for")
 {
-    fsUsed = p.getSampleRate() > 0 ? p.getSampleRate() : 48000.0;
-    inAn.prepare (fsUsed);
-    outAn.prepare (fsUsed);
-
     resetButton.setTooltip ("Start listening again (e.g. for another song). The analyzer averages everything it hears since RESET.");
-    resetButton.onClick = [this] { resetListening(); };
-    assistButton.setTooltip ("Set EQ, compressor, limiter and mono bass towards the target (after ~10 s of listening)");
+    resetButton.onClick = [this] { ta.reset(); };
+    assistButton.setTooltip ("Set EQ, compressor, limiter and mono bass towards the tonal target and the streaming loudness target");
     assistButton.onClick = [this] { applyAssist(); };
     assistButton.setEnabled (false);
+    loudSel.setTooltip ("Where the song will be released: loudness verdicts and ASSIST aim for this level at -1 dBTP");
 
-    for (auto* c : std::initializer_list<Component*> { &genreSel, &decadeSel, &resetButton, &assistButton })
+    for (auto* c : std::initializer_list<Component*> { &genreSel, &decadeSel, &loudSel, &resetButton, &assistButton })
         addAndMakeVisible (c);
-}
-
-float AnalyzerPanel::targetYear() const
-{
-    return 1965.0f + 10.0f * proc.apvts.getRawParameterValue (ParamIDs::targetDecade)->load();
-}
-
-int AnalyzerPanel::targetGenreIdx() const
-{
-    return (int) proc.apvts.getRawParameterValue (ParamIDs::targetGenre)->load();
-}
-
-void AnalyzerPanel::resetListening()
-{
-    inAn.resetSong();
-    outLoudE = inLoudE = 0.0; outLoudN = inLoudN = 0; tpSince = 0.0f;
-    report = {};
-    soundsLike.clear(); character.clear();
-    assistButton.setEnabled (false);
-}
-
-void AnalyzerPanel::feedForTest()
-{
-    proc.inFifo.pull  ([this] (const float* l, const float* r, int n) { inAn.push (l, r, n); });
-    proc.outFifo.pull ([this] (const float* l, const float* r, int n)
-    {
-        outAn.push (l, r, n);
-        for (int i = 0; i < n; ++i) tickPeak = std::max (tickPeak, std::max (std::abs (l[i]), std::abs (r[i])));
-    });
-}
-
-an::Spectrum AnalyzerPanel::eqResponse() const
-{
-    an::Spectrum r {};
-    auto v = [this] (const char* id) { return proc.apvts.getRawParameterValue (id)->load(); };
-    if (v (ParamIDs::eqOn) < 0.5f) return r;
-    constexpr double fs = 96000.0;
-    sn::Biquad hp, lo, mid, hi;
-    if (v (ParamIDs::hpfFreq) >= 15.0f) hp.setHighPass (fs, v (ParamIDs::hpfFreq)); else hp.setBypass();
-    lo.setLowShelf  (fs, v (ParamIDs::lowFreq), 0.707, v (ParamIDs::lowGain));
-    mid.setPeak     (fs, v (ParamIDs::midFreq), v (ParamIDs::midQ), v (ParamIDs::midGain));
-    hi.setHighShelf (fs, v (ParamIDs::highFreq), 0.707, v (ParamIDs::highGain));
-    for (int b = 0; b < an::kBands; ++b)
-    {
-        const double f = an::bandHz[(size_t) b];
-        r[(size_t) b] = (float) (hp.magnitudeDb (fs, f) + lo.magnitudeDb (fs, f) + mid.magnitudeDb (fs, f) + hi.magnitudeDb (fs, f));
-    }
-    return r;
-}
-
-an::Spectrum AnalyzerPanel::predicted() const
-{
-    auto s = inAn.song();
-    const auto eq = eqResponse();
-    for (int b = 0; b < an::kBands; ++b) s[(size_t) b] += eq[(size_t) b];
-    return s;
-}
-
-/** Змінились налаштування, що впливають на гучність/динаміку → міряємо вихід заново. */
-bool AnalyzerPanel::dynamicsChanged()
-{
-    using namespace ParamIDs;
-    static const char* ids[] { inGain, outGain, compOn, threshold, ratio, makeup, compMix, limOn, limGain, ceiling };
-    std::array<float, 10> now {};
-    for (size_t i = 0; i < now.size(); ++i) now[i] = proc.apvts.getRawParameterValue (ids[i])->load();
-    const bool changed = now != dynSnapshot;
-    dynSnapshot = now;
-    return changed;
 }
 
 void AnalyzerPanel::tick()
 {
-    if (proc.getSampleRate() > 0 && proc.getSampleRate() != fsUsed)
-    {
-        fsUsed = proc.getSampleRate();
-        inAn.prepare (fsUsed); outAn.prepare (fsUsed);
-    }
-    feedForTest();
+    assistButton.setEnabled (ta.inAn.songSeconds() >= 8.0);
 
-    // Гучність: короткострокові значення, усереднені по енергії (тиша не рахується)
-    if (dynamicsChanged()) settleTicks = 30;                  // 1 с після зміни ручки — перехідний процес
-    if (settleTicks > 0)
+    // Точне попадання в ціль гучності: після ASSIST міряємо результат і доводимо драйв лімітера (до 3 кроків)
+    if (refineSteps > 0 && ta.outMeasuredSeconds() >= 4.0 && ta.outLufs() > -70.0f)
     {
-        --settleTicks;
-        outLoudE = 0.0; outLoudN = 0; tpSince = 0.0f;
+        const float delta = ta.loudTargetLufs() - ta.outLufs();
+        if (std::abs (delta) > 0.4f)
+        {
+            auto* prm = proc.apvts.getParameter (ParamIDs::limGain);
+            const float now = proc.apvts.getRawParameterValue (ParamIDs::limGain)->load();
+            prm->beginChangeGesture();
+            prm->setValueNotifyingHost (prm->convertTo0to1 (jlimit (0.0f, 18.0f, now + 0.9f * delta)));
+            prm->endChangeGesture();
+            --refineSteps;
+        }
+        else refineSteps = 0;
     }
-    else
-    {
-        const float st = proc.loudness.shortTerm.load();
-        if (st > -60.0f) { outLoudE += std::pow (10.0, st / 10.0); ++outLoudN; }
-        tpSince = std::max (tpSince, tickPeak);
-    }
-    const float stIn = proc.inLoudness.shortTerm.load();
-    if (stIn > -60.0f) { inLoudE += std::pow (10.0, stIn / 10.0); ++inLoudN; }
-    tickPeak = 0.0f;
-
-    assistButton.setEnabled (inAn.songSeconds() >= 8.0);
-    if (++frameCounter % 30 == 0 || (report.verdicts.empty() && inAn.songSeconds() > 2.0))
-        updateReport();
     if (assistMessageFrames > 0) --assistMessageFrames;
     repaint();
 }
 
-void AnalyzerPanel::updateReport()
-{
-    if (inAn.songSeconds() < 2.0) return;
-    const float lufs = outLoudN > 30 ? (float) (10.0 * std::log10 (outLoudE / outLoudN)) : -100.0f;
-    const float tp = sn::gainToDb (tpSince);
-    const auto mix = predicted();
-    report = an::analyse (mix, lufs, tp, outAn.correlation(), outAn.lowSideDb(), targetYear(), targetGenreIdx());
-
-    // Найважливіше спершу: проблеми, потім зауваження
-    std::stable_sort (report.verdicts.begin(), report.verdicts.end(), [] (const an::Verdict& a, const an::Verdict& b) { return a.level > b.level; });
-
-    // На що схожий трек (у межах обраного жанру): найближчий рік за формою спектра і гучністю
-    const int g = targetGenreIdx();
-    const auto m = an::normalise (mix);
-    float best = 1e9f, bestYear = 1990.0f;
-    for (float y = 1960.0f; y <= 2025.0f; y += 1.0f)
-    {
-        const auto t = an::normalise (an::targetCurve (y, g));
-        double sum = 0.0; int n = 0;
-        for (int b = 0; b < an::kBands; ++b)
-            if (an::bandHz[(size_t) b] >= 40.0f && an::bandHz[(size_t) b] <= 12500.0f) { sum += std::abs (m[(size_t) b] - t[(size_t) b]); ++n; }
-        const float score = (float) (sum / std::max (1, n)) + (lufs > -70.0f ? 0.35f * std::abs (lufs - era::forYear (y, g).targetLufs) : 0.0f);
-        if (score < best) { best = score; bestYear = y; }
-    }
-    soundsLike = String (an::genreName (g)) + " " + an::decadeName (bestYear) + " (" + String (jlimit (0, 100, roundToInt (100.0f - best * 9.0f))) + "%)";
-
-    // Характер: коротко словами (відносно типового рок-мастера тієї ж епохи)
-    const auto ref = an::normalise (an::targetCurve (targetYear(), 0));
-    auto dev = [&] (float lo, float hi)
-    {
-        double s = 0; int n = 0;
-        for (int b = 0; b < an::kBands; ++b)
-            if (an::bandHz[(size_t) b] >= lo && an::bandHz[(size_t) b] <= hi) { s += m[(size_t) b] - ref[(size_t) b]; ++n; }
-        return (float) (s / std::max (1, n));
-    };
-    StringArray tags;
-    const float low = dev (50, 125), lowMid = dev (160, 400), mid = dev (500, 1250), pres = dev (1600, 5000), air = dev (6300, 16000);
-    tags.add (low > 2.5f ? "heavy low end" : low < -2.5f ? "light low end" : "solid low end");
-    if (lowMid > 2.0f) tags.add ("thick low-mids"); else if (lowMid < -2.0f) tags.add ("clean low-mids");
-    if (mid < -2.0f) tags.add ("scooped mids"); else if (mid > 2.0f) tags.add ("mid-forward");
-    tags.add (pres + air > 4.0f ? "bright" : pres + air < -4.0f ? "dark" : "balanced top");
-    if (lufs > -70.0f)
-    {
-        const float plr = tp - lufs;
-        tags.add (plr < 7.0f ? "squashed" : plr < 10.0f ? "dense" : plr > 15.0f ? "very dynamic" : "punchy");
-        tags.add (lufs > -9.0f ? "very loud" : lufs > -13.0f ? "loud" : lufs > -17.0f ? "moderate level" : "quiet");
-    }
-    character = tags.joinIntoString (" · ");
-}
-
 void AnalyzerPanel::applyAssist()
 {
-    if (inAn.songSeconds() < 2.0) return;
+    if (ta.inAn.songSeconds() < 2.0) return;
 
-    const auto tgt = an::normalise (an::targetCurve (targetYear(), targetGenreIdx()));
-    const auto in = an::normalise (inAn.song());
+    const auto tgt = an::normalise (an::targetCurve (ta.targetYear(), ta.targetGenreIdx()));
+    const auto in = an::normalise (ta.inAn.song());
     an::Spectrum dev;
     for (int b = 0; b < an::kBands; ++b) dev[(size_t) b] = in[(size_t) b] - tgt[(size_t) b];
 
@@ -214,8 +84,7 @@ void AnalyzerPanel::applyAssist()
         if (std::abs (d) > std::abs (midDev)) { midDev = d; midBand = b; }
     }
 
-    const float lufsIn = inLoudN > 0 ? (float) (10.0 * std::log10 (inLoudE / inLoudN)) : -20.0f;
-    const auto eraS = era::forYear (targetYear(), targetGenreIdx());
+    const float lufsIn = ta.inLufs() > -70.0f ? ta.inLufs() : -20.0f;
 
     auto set = [this] (const char* id, float v)
     {
@@ -229,11 +98,12 @@ void AnalyzerPanel::applyAssist()
     const float highG = jlimit (-6.0f, 6.0f, -avgDev (6300.0f, 16000.0f));
     const float midG  = std::abs (midDev) > 1.0f ? jlimit (-6.0f, 6.0f, -0.8f * midDev) : 0.0f;
     const bool cutSub = avgDev (31.5f, 50.0f) > 3.0f;
-    const bool monoBass = outAn.lowSideDb() > -15.0f || inAn.lowSideDb() > -15.0f;
+    const bool monoBass = ta.outAn.lowSideDb() > -15.0f || ta.inAn.lowSideDb() > -15.0f;
     // Gain staging: спершу виводимо вхід на робочий рівень -18 LUFS, далі компресор і лімітер від нього
     constexpr float workLufs = -18.0f;
     const float inGainDb = jlimit (-24.0f, 24.0f, workLufs - lufsIn);
-    const float limGain = jlimit (0.0f, 18.0f, eraS.targetLufs - workLufs);
+    // Лімітер дотягує до цілі стрімінгу (компресор дає ще ~1 дБ щільності)
+    const float limGain = jlimit (0.0f, 18.0f, ta.loudTargetLufs() - workLufs - 1.0f);
 
     using namespace ParamIDs;
     set (eqOn, 1.0f);
@@ -257,11 +127,12 @@ void AnalyzerPanel::applyAssist()
 
     String msg = "Assist: input " + String (inGainDb, 1) + " dB, low " + String (lowG, 1) + " dB, ";
     if (midBand >= 0 && midG != 0.0f) msg << String (midG, 1) << " dB @ " << String (roundToInt (an::bandHz[(size_t) midBand])) << " Hz, ";
-    msg << "high " << String (highG, 1) << " dB, limiter +" << String (limGain, 1) << " dB";
+    msg << "high " << String (highG, 1) << " dB, limiter +" << String (limGain, 1) << " dB → " << String (roundToInt (ta.loudTargetLufs())) << " LUFS";
     if (monoBass) msg << ", mono bass";
     assistMessage = msg;
     assistMessageFrames = 400;
-    updateReport();
+    refineSteps = 3;
+    ta.updateReport();
 }
 
 void AnalyzerPanel::drawSpectrum (Graphics& g, Rectangle<float> r)
@@ -318,22 +189,17 @@ void AnalyzerPanel::drawSpectrum (Graphics& g, Rectangle<float> r)
     };
 
     // Для порівняння: типовий рок-мастер тієї ж епохи (коли обрано інший жанр — видно, чим жанр відрізняється)
-    if (targetGenreIdx() != 0)
-        dashedStroke (pathOf (an::normalise (an::targetCurve (targetYear(), 0))), Theme::muted.withAlpha (0.45f), 1.0f);
+    if (ta.targetGenreIdx() != 0)
+        dashedStroke (pathOf (an::normalise (an::targetCurve (ta.targetYear(), 0))), Theme::muted.withAlpha (0.45f), 1.0f);
 
-    const auto tgt = an::normalise (an::targetCurve (targetYear(), targetGenreIdx()));
-    const bool haveSong = inAn.songSeconds() >= 2.0;
+    const auto tgt = an::normalise (an::targetCurve (ta.targetYear(), ta.targetGenreIdx()));
+    const bool haveSong = ta.inAn.songSeconds() >= 2.0;
 
     // «Зараз» — ледь помітно, лише щоб бачити, що аналізатор слухає
-    if (outAn.hasSignal())
-    {
-        g.setColour (Theme::muted.withAlpha (0.28f));
-        g.strokePath (pathOf (an::normalise (outAn.average())), PathStrokeType (1.0f));
-    }
 
     if (haveSong)
     {
-        const auto mix = an::normalise (predicted());
+        const auto mix = an::normalise (ta.predicted());
         for (int b = 0; b < an::kBands; ++b)
         {
             const float d = mix[(size_t) b] - tgt[(size_t) b];
@@ -355,12 +221,12 @@ void AnalyzerPanel::drawSpectrum (Graphics& g, Rectangle<float> r)
     g.setColour (Theme::accent);
     g.drawText ("YOUR TRACK (whole song + EQ)", leg.removeFromLeft (190.0f), Justification::centredLeft);
     g.setColour (Theme::accent2);
-    g.drawText ("TARGET: " + String (an::genreName (targetGenreIdx())).toUpperCase() + " " + an::decadeName (targetYear()),
+    g.drawText ("TARGET: " + String (an::genreName (ta.targetGenreIdx())).toUpperCase() + " " + an::decadeName (ta.targetYear()),
                 leg.removeFromLeft (170.0f), Justification::centredLeft);
-    if (targetGenreIdx() != 0)
+    if (ta.targetGenreIdx() != 0)
     {
         g.setColour (Theme::muted);
-        g.drawText ("ROCK " + an::decadeName (targetYear()), leg.removeFromLeft (90.0f), Justification::centredLeft);
+        g.drawText ("ROCK " + an::decadeName (ta.targetYear()), leg.removeFromLeft (90.0f), Justification::centredLeft);
     }
     g.setColour (Theme::muted.withAlpha (0.8f));
     g.setFont (FontOptions (9.5f));
@@ -375,11 +241,12 @@ void AnalyzerPanel::paint (Graphics& g)
     // Статус праворуч від заголовка
     g.setColour (Theme::muted);
     g.setFont (FontOptions (11.0f));
-    const double sec = inAn.songSeconds();
-    g.drawText (sec >= 1.0 ? "listened " + mmss (sec) + " of the track" : String ("press play: listens to the whole track"),
+    const double sec = ta.inAn.songSeconds();
+    g.drawText (sec >= 1.0 ? "listened " + mmss (sec) + " of the track  |  target " + String (roundToInt (ta.loudTargetLufs())) + " LUFS, -1 dBTP" : String ("press play: listens to the whole track"),
                 Rectangle<int> (200, 10, getWidth() - 220, 24), Justification::centredRight);
 
     auto v = verdictArea.toFloat();
+    const auto& report = ta.report;
     const bool have = sec >= 2.0 && ! report.verdicts.empty();
 
     g.setColour (Theme::muted);
@@ -392,13 +259,13 @@ void AnalyzerPanel::paint (Graphics& g)
     g.drawText (have ? String (pct) + "%" : String ("--"), line.removeFromLeft (80.0f), Justification::centredLeft);
     g.setColour (Theme::text);
     g.setFont (FontOptions (12.0f));
-    g.drawFittedText (have ? "sounds most like: " + soundsLike : String ("play the song (ideally all of it)"),
+    g.drawFittedText (have ? "sounds most like: " + ta.soundsLike : String ("play the song (ideally all of it)"),
                       line.toNearestInt(), Justification::centredLeft, 1, 0.85f);
-    if (have && character.isNotEmpty())
+    if (have && ta.character.isNotEmpty())
     {
         g.setColour (Theme::accent2);
         g.setFont (FontOptions (11.5f, Font::bold));
-        g.drawFittedText (character, v.removeFromTop (30.0f).toNearestInt(), Justification::centredLeft, 2, 0.85f);
+        g.drawFittedText (ta.character, v.removeFromTop (30.0f).toNearestInt(), Justification::centredLeft, 2, 0.85f);
     }
     v.removeFromTop (4.0f);
 
@@ -445,9 +312,11 @@ void AnalyzerPanel::resized()
     graphArea = r;
 
     auto controls = right.removeFromTop (42);
-    genreSel.setBounds (controls.removeFromLeft (310).withTrimmedTop (10));
+    genreSel.setBounds (controls.removeFromLeft (300).withTrimmedTop (10));
     controls.removeFromLeft (6);
     decadeSel.setBounds (controls);
+    right.removeFromTop (4);
+    loudSel.setBounds (right.removeFromTop (42).removeFromLeft (220));
     right.removeFromTop (6);
     auto buttons = right.removeFromBottom (26);
     resetButton.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2 - 3));

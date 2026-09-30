@@ -29,7 +29,7 @@ SpacenerdEraProcessor::SpacenerdEraProcessor()
 {
     for (auto* param : getParameters())
         if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param))
-            params[ranged->getParameterID()] = apvts.getRawParameterValue (ranged->getParameterID());
+            params.add (ranged->getParameterID(), apvts.getRawParameterValue (ranged->getParameterID()));
     for (auto& b : bandLevel) b.store (0.0f);
 }
 
@@ -312,7 +312,7 @@ void SpacenerdEraProcessor::processChunk (juce::AudioBuffer<float>& buffer)
         pushSm.applyGain (buffer, n);
     }
     measureTruePeak (buffer, numCh, n);
-    const float minG = limiter.process (data, numCh, n, peakBuf.data(), dbToGain (-1.0f), 60.0f, true);
+    const float minG = limiter.process (data, numCh, n, peakBuf.data(), dbToGain (-1.0f), 60.0f, 1.0f, 1.0f);
     limGr.push (-gainToDb (minG));
     postLimLoudness.process (buffer);
     {

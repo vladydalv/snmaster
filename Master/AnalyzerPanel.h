@@ -12,45 +12,28 @@ class AnalyzerPanel final : public juce::Component
 {
 public:
     explicit AnalyzerPanel (SpacenerdMasterProcessor&);
-    void tick();                        // ~30 Гц з таймера редактора
+    void tick();                        // ~30 Гц з таймера редактора (лише перемальовування: аналіз — у процесорі)
     void paint (juce::Graphics&) override;
     void resized() override;
 
     // Для тестів
-    void feedForTest();
     void applyAssist();
-    void resetListening();
-    const an::Report& getReport() const { return report; }
-    an::Spectrum mixSpectrum() const { return predicted(); }
-    double listenedSeconds() const { return inAn.songSeconds(); }
+    void resetListening() { proc.analysis.reset(); }
+    const an::Report& getReport() const { return proc.analysis.report; }
+    an::Spectrum mixSpectrum() const { return proc.analysis.predicted(); }
+    double listenedSeconds() const { return proc.analysis.inAn.songSeconds(); }
 
 private:
-    float targetYear() const;
-    int targetGenreIdx() const;
-    an::Spectrum eqResponse() const;            // АЧХ еквалайзера Master на смугах аналізатора
-    an::Spectrum predicted() const;             // весь трек (вхід) + EQ
-    void updateReport();
     void drawSpectrum (juce::Graphics&, juce::Rectangle<float>);
-    bool dynamicsChanged();
 
     SpacenerdMasterProcessor& proc;
-    an::Analyzer inAn, outAn;
-    an::Report report;
-    juce::String soundsLike, character;
-    int frameCounter = 0;
-    double fsUsed = 0.0;
+    TrackAnalysis& ta;
     juce::String assistMessage;
     int assistMessageFrames = 0;
-
-    // Гучність і піки на виході — з поточними налаштуваннями динаміки (скидається, коли їх змінюють)
-    double outLoudE = 0.0, inLoudE = 0.0;
-    int outLoudN = 0, inLoudN = 0;
-    float tpSince = 0.0f, tickPeak = 0.0f;
-    std::array<float, 10> dynSnapshot {};
-    int settleTicks = 0;
+    int refineSteps = 0;         // після ASSIST: підлаштувати драйв лімітера за фактичною гучністю
 
     snui::Segmented genreSel;
-    snui::LabeledCombo decadeSel;
+    snui::LabeledCombo decadeSel, loudSel;
     juce::TextButton resetButton { "RESET" }, assistButton { "ASSIST" };
     juce::Rectangle<int> graphArea, verdictArea;
 };

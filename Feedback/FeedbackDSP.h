@@ -128,7 +128,7 @@ public:
     void prepare (double sampleRate)
     {
         fs = sampleRate;
-        pitch.prepare (fs);
+        pitch.prepare (fs, 45.0);   // до Drop B (B1 ≈ 61.7 Гц) з запасом
         loop.prepare (fs);
         auto c = [this] (double ms) { return (float) std::exp (-1.0 / (0.001 * ms * fs)); };
         fA = c (1.0); fR = c (10.0); sA = c (20.0); sR = c (150.0);
@@ -167,7 +167,7 @@ public:
             const float prevS = envS;
             envF = ax > envF ? ax + fA * (envF - ax) : ax + fR * (envF - ax);
             envS = ax > envS ? ax + sA * (envS - ax) : ax + sR * (envS - ax);
-            ++sinceOnset;
+            if (sinceOnset < (1 << 30)) ++sinceOnset;   // без переповнення в довгих сесіях
             if (envF > 2.0f * prevS && envF > kGate && sinceOnset > (int) (0.08 * fs))
                 sinceOnset = 0;
             const bool muted = envS > kGate && envF < 0.03f * envS;

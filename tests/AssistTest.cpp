@@ -104,7 +104,7 @@ int main()
             AudioBuffer<float> b (2, 512);
             mix.fill (b);
             p.processBlock (b, midi);
-            if (k % 3 == 0) an.tick();    // ≈ 31 Гц, як таймер інтерфейсу
+            if (k % 3 == 0) { p.analysis.tick(); an.tick(); }    // ≈ 31 Гц, як таймер процесора
         }
     };
 
@@ -132,7 +132,7 @@ int main()
     }
     an.applyAssist();
     p.resetMeters();
-    play (16.0);
+    play (24.0);
     const auto after = an.getReport();
     std::cout << "After Assist (match " << after.matchPercent << "%):" << std::endl;
     for (auto& v : after.verdicts) std::cout << "   - " << v.text << std::endl;
@@ -141,6 +141,8 @@ int main()
     std::cout << "   EQ mid " << midGain << " dB @ " << midFreq << " Hz, limiter gain "
               << p.apvts.getRawParameterValue (ParamIDs::limGain)->load() << " dB, mono bass "
               << p.apvts.getRawParameterValue (ParamIDs::monoBass)->load() << " Hz" << std::endl;
+    std::cout << "   loudness after Assist: " << p.analysis.outLufs() << " LUFS (target " << p.analysis.loudTargetLufs() << ")" << std::endl;
+    check (std::abs (p.analysis.outLufs() - p.analysis.loudTargetLufs()) < 1.0f, "Assist lands on the streaming loudness target");
     check (after.matchPercent > before.matchPercent + 15, "Assist improves match: " + String (before.matchPercent) + "% -> " + String (after.matchPercent) + "%");
     check (midGain < -2.0f && midFreq > 150.0f && midFreq < 450.0f, "Assist cuts the mud region");
 

@@ -233,8 +233,9 @@ inline const char* genreName (int g)
 }
 
 /** Повний звіт: тональний баланс, гучність, динаміка, стерео. */
+/** loudTargetLufs/loudName: ціль гучності (напр. стрімінг −14 LUFS); якщо не задано — типова гучність епохи. */
 inline Report analyse (const Spectrum& mix, float lufsIntegrated, float truePeakDb, float correlation, float lowSideDb,
-                       float year, int genre)
+                       float year, int genre, float loudTargetLufs = -100.0f, const char* loudName = nullptr)
 {
     Report rep;
     const auto tgt = normalise (targetCurve (year, genre));
@@ -257,22 +258,29 @@ inline Report analyse (const Spectrum& mix, float lufsIntegrated, float truePeak
                                       juce::String (d > 0 ? r.fixMuch : r.fixLittle) + juce::String (juce::roundToInt (std::min (6.0f, std::abs (d)))) });
     }
 
-    const float targetLufs = era::forYear (year, genre).targetLufs;
+    const bool streaming = loudTargetLufs > -60.0f && loudName != nullptr;
+    const float targetLufs = streaming ? loudTargetLufs : era::forYear (year, genre).targetLufs;
     float loudPenalty = 0.0f, dynPenalty = 0.0f;
     if (lufsIntegrated > -70.0f)
     {
         const float dl = lufsIntegrated - targetLufs;
-        if (dl < -3.0f)      rep.verdicts.push_back ({ "Quiet for " + juce::String (genreName (genre)) + " " + decadeName (year) + ": " + juce::String (lufsIntegrated, 1) + " LUFS (typical " + juce::String (juce::roundToInt (targetLufs)) + ")", 1,
-                                                       "LIMITER: GAIN +" + juce::String (juce::roundToInt (-dl)) + " dB" });
-        else if (dl > 2.0f)  rep.verdicts.push_back ({ "Louder than typical: " + juce::String (lufsIntegrated, 1) + " LUFS (streaming will turn it down)", 1,
-                                                       "LIMITER: GAIN -" + juce::String (juce::roundToInt (dl)) + " dB" });
+        const juce::String where = streaming ? juce::String (loudName) : juce::String (genreName (genre)) + " " + decadeName (year);
+        if (dl < -2.0f)
+            rep.verdicts.push_back ({ "Quiet for " + where + ": " + juce::String (lufsIntegrated, 1) + " LUFS (target " + juce::String (juce::roundToInt (targetLufs)) + ")", 1,
+                                      "LIMITER: DRIVE +" + juce::String (juce::roundToInt (-dl)) + " dB" });
+        else if (dl > 1.5f)
+            rep.verdicts.push_back ({ streaming ? "Louder than " + where + ": it will be turned down " + juce::String (dl, 1) + " dB, punch lost for nothing"
+                                                : "Louder than typical: " + juce::String (lufsIntegrated, 1) + " LUFS",
+                                      dl > 4.0f ? 2 : 1, "LIMITER: DRIVE -" + juce::String (juce::roundToInt (dl)) + " dB" });
+        else if (streaming)
+            rep.verdicts.push_back ({ "Loudness on target for " + where + " (" + juce::String (lufsIntegrated, 1) + " LUFS)", 0 });
         loudPenalty = std::max (0.0f, std::abs (dl) - 1.5f);
 
         const float plr = truePeakDb - lufsIntegrated;
-        if (plr < 6.0f)       { rep.verdicts.push_back ({ "Over-compressed / squashed (PLR " + juce::String (plr, 1) + " dB)", 2, "LIMITER: GAIN -, COMP: THRESHOLD +" }); dynPenalty = (6.0f - plr) * 2.0f; }
-        else if (plr < 8.0f)  rep.verdicts.push_back ({ "Dense, little punch left (PLR " + juce::String (plr, 1) + " dB)", 1, "COMP: ATTACK 20-30 ms, or LIMITER: GAIN -" });
+        if (plr < 6.0f)       { rep.verdicts.push_back ({ "Over-compressed / squashed (PLR " + juce::String (plr, 1) + " dB)", 2, "LIMITER: DRIVE -, COMP: THRESHOLD +" }); dynPenalty = (6.0f - plr) * 2.0f; }
+        else if (plr < 8.0f)  rep.verdicts.push_back ({ "Dense, little punch left (PLR " + juce::String (plr, 1) + " dB)", 1, "COMP: ATTACK 20-30 ms, or LIMITER: DRIVE -" });
         else if (plr > 16.0f) rep.verdicts.push_back ({ "Very dynamic: may sound weak on phones (PLR " + juce::String (plr, 1) + " dB)", 1, "COMP: THRESHOLD -, RATIO 2-3" });
-        if (truePeakDb > -0.5f) rep.verdicts.push_back ({ "Peaks " + juce::String (truePeakDb, 1) + " dB: may distort after MP3/streaming", 2, "LIMITER: ON, CEILING -1 dB" });
+        if (truePeakDb > -0.9f) rep.verdicts.push_back ({ "Peaks " + juce::String (truePeakDb, 1) + " dB: may distort after streaming encode (keep -1 dBTP)", 2, "LIMITER: ON, CEILING -1 dB" });
     }
     if (lowSideDb > -12.0f) rep.verdicts.push_back ({ "Bass is wide (not mono)", 1, "STEREO: MONO BASS 100-150 Hz" });
     if (correlation < 0.0f)  rep.verdicts.push_back ({ "Phase problem: mix collapses in mono", 2, "STEREO: WIDTH down; check stereo tracks" });

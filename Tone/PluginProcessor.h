@@ -41,11 +41,11 @@ public:
     sn::AtomicMax deEssGr;
 
 private:
-    float p (const char* id) const { return params.at (id)->load (std::memory_order_relaxed); }
+    float p (const char* id) const noexcept { return params.get (id); }
     bool on (const char* id) const { return p (id) > 0.5f; }
     void processChunk (juce::AudioBuffer<float>&);
 
-    std::map<juce::String, std::atomic<float>*> params;
+    sn::ParamCache params;
     std::atomic<int> currentPreset { 0 };
     int maxBlock = 512;
 
@@ -63,6 +63,10 @@ private:
 
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> inGainSm, outGainSm;
     juce::SmoothedValue<float> mixSm, wowSm;
+    float trMix = 0, tubeMixF = 0, tapeMixF = 0, excMixF = 0, dsMixF = 0;
+    float tubeDriveSm = 0, tubeWetSm = 1, tapeDriveSm = 0;
+    bool firstBlock = true;
+    juce::AudioBuffer<float> scratch;
 
     double fs = 44100.0;
     static constexpr int kOsOrder = 2;

@@ -35,6 +35,12 @@ Knob::Knob (APVTS& state, const String& paramId, const String& title, bool bipol
     addAndMakeVisible (slider);
 }
 
+Knob& Knob::help (const juce::String& text)
+{
+    slider.setTooltip (label.getText() + ": " + text);
+    return *this;
+}
+
 void Knob::resized()
 {
     auto r = getLocalBounds();

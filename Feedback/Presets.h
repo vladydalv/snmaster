@@ -23,7 +23,7 @@ inline const std::vector<FbPreset>& getFeedbackPresets()
         { "Close Squeal",  { { trigger, 2 }, { delay, 0.5f }, { harmonic, 2 }, { distance, 10 },
                             { amount, 70 }, { morph, 40 }, { tone, 4500 }, { drift, 15 } } },
         // Вокальне «виття» на основному тоні, керування кнопкою Hold
-        { "Wailing Lead",  { { trigger, 1 }, { harmonic, 0 }, { distance, 35 },
+        { "Wailing Lead",  { { trigger, 2 }, { harmonic, 0 }, { distance, 35 },
                             { amount, 80 }, { morph, 50 }, { tone, 3000 }, { drift, 30 } } },
         // Далеко, м'яко, повільно: струна розчиняється у фідбеку
         { "Space Swell",   { { trigger, 0 }, { delay, 1.0f }, { harmonic, 3 }, { distance, 95 },

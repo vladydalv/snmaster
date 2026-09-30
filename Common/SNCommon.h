@@ -1,5 +1,9 @@
 #pragma once
 
+#include <map>
+#include <string>
+#include <string_view>
+
 #include <juce_dsp/juce_dsp.h>
 #include <atomic>
 #include <array>
@@ -9,6 +13,46 @@
 
 namespace sn
 {
+/** Плавне вмикання/вимикання модуля (без клацань): mix повзе до target на step за виклик,
+    під час переходу вихід = суміш обробленого й сухого. fn(fresh) — обробка на місці; fresh = щойно ввімкнули. */
+template <typename Fn>
+inline void runFaded (float& mix, bool target, float* const* data, int numCh, int n, float step,
+                      juce::AudioBuffer<float>& scratch, Fn&& fn)
+{
+    const float t = target ? 1.0f : 0.0f;
+    if (mix <= 0.0f && ! target) return;
+    const float m0 = mix;
+    const float m1 = std::abs (t - mix) <= step ? t : mix + (t > mix ? step : -step);
+    mix = m1;
+    if (m0 >= 1.0f && m1 >= 1.0f) { fn (false); return; }
+    for (int ch = 0; ch < numCh; ++ch) std::copy_n (data[ch], n, scratch.getWritePointer (ch));
+    fn (m0 <= 0.0f);
+    for (int ch = 0; ch < numCh; ++ch)
+    {
+        const float* dry = scratch.getReadPointer (ch);
+        for (int i = 0; i < n; ++i)
+        {
+            const float k = m0 + (m1 - m0) * (float) i / (float) n;
+            data[ch][i] = k * data[ch][i] + (1.0f - k) * dry[i];
+        }
+    }
+}
+
+/** Швидкий доступ до значень параметрів за ID без виділення пам'яті (безпечно в аудіопотоці). */
+class ParamCache
+{
+public:
+    void add (const juce::String& id, std::atomic<float>* v) { m[id.toStdString()] = v; }
+    float get (const char* id) const noexcept
+    {
+        auto it = m.find (std::string_view (id));
+        jassert (it != m.end());
+        return it->second->load (std::memory_order_relaxed);
+    }
+private:
+    std::map<std::string, std::atomic<float>*, std::less<>> m;
+};
+
 inline float dbToGain (float db) noexcept { return std::pow (10.0f, db * 0.05f); }
 inline float gainToDb (float g)  noexcept { return 20.0f * std::log10 (std::max (g, 1.0e-9f)); }
 

@@ -54,7 +54,14 @@ namespace ParamIDs
     // Ціль аналізатора
     inline constexpr auto targetGenre  = "targetGenre";
     inline constexpr auto targetDecade = "targetDecade";
+    inline constexpr auto loudTarget   = "loudTarget";     // куди релізимо: стрімінг
+
+    // М'який кліпер перед лімітером
+    inline constexpr auto clip      = "clip";
 }
+
+/** Цілі гучності стрімінгів (інтегрована, LUFS) і стеля −1 dBTP. */
+inline const std::array<float, 4> kLoudTargets { -14.0f, -16.0f, -15.0f, -9.0f };
 
 namespace ParamText
 {
@@ -139,7 +146,8 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     layout.add (std::make_unique<F> (id (ParamIDs::monoBass), "Mono Bass", lin (0.0f, 300.0f), 0.0f, monoText));
 
     layout.add (std::make_unique<B> (id (ParamIDs::limOn), "Limiter On", true));
-    layout.add (std::make_unique<F> (id (ParamIDs::limGain), "Gain",    lin (0.0f, 18.0f), 0.0f, dB));
+    layout.add (std::make_unique<F> (id (ParamIDs::limGain), "Limiter Drive", lin (0.0f, 18.0f), 0.0f, dB));
+    layout.add (std::make_unique<F> (id (ParamIDs::clip),    "Clip",    lin (0.0f, 100.0f), 0.0f, pct));
     layout.add (std::make_unique<F> (id (ParamIDs::ceiling), "Ceiling", lin (-3.0f, 0.0f), -1.0f, dB));
     layout.add (std::make_unique<F> (id (ParamIDs::limRel),  "Lim Release", range (1.0f, 500.0f, 60.0f), 60.0f, ms));
 
@@ -148,6 +156,8 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
                     StringArray { "Rock", "Stoner", "Psych", "Space", "Grunge" }, 1));
     layout.add (std::make_unique<AudioParameterChoice> (id (ParamIDs::targetDecade), "Target Decade",
                     StringArray { "1960s", "1970s", "1980s", "1990s", "2000s", "2010s", "2020s" }, 3));
+    layout.add (std::make_unique<AudioParameterChoice> (id (ParamIDs::loudTarget), "Loudness Target",
+                    StringArray { "Spotify / YouTube -14", "Apple Music -16", "Deezer -15", "Loud master -9" }, 0));
 
     return layout;
 }

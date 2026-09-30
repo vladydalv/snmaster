@@ -43,14 +43,14 @@ public:
     std::atomic<float> lfoView { 0.0f }, bpmView { 0.0f }, trackedHz { 0.0f };
 
 private:
-    float p (const char* id) const { return params.at (id)->load (std::memory_order_relaxed); }
+    float p (const char* id) const noexcept { return params.get (id); }
     bool on (const char* id) const { return p (id) > 0.5f; }
     void processChunk (juce::AudioBuffer<float>&);
     float syncedRate (double bpm) const;
     float echoTimeMs (double bpm) const;
     void runOctaver (float* const* data, int numCh, int n, double bpm, float* subClean = nullptr);
 
-    std::map<juce::String, std::atomic<float>*> params;
+    sn::ParamCache params;
     std::atomic<int> currentPreset { 0 };
     int maxBlock = 512;
 
@@ -67,7 +67,9 @@ private:
 
     // Згладжені налаштування педалі (оновлюються кожні kSub семплів)
     st::Pedal::Settings sm {};
-    float bassMix = 0.0f, driveMix = 1.0f;
+    float bassMix = 0.0f, driveMix = 1.0f, modMix = 0.0f;
+    juce::AudioBuffer<float> scratch;
+    double wobbleHz (double bpm) const;
     bool first = true;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> outGainSm;
 

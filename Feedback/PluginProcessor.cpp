@@ -11,7 +11,7 @@ SpacenerdFeedbackProcessor::SpacenerdFeedbackProcessor()
 {
     for (auto* param : getParameters())
         if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param))
-            params[ranged->getParameterID()] = apvts.getRawParameterValue (ranged->getParameterID());
+            params.add (ranged->getParameterID(), apvts.getRawParameterValue (ranged->getParameterID()));
 }
 
 bool SpacenerdFeedbackProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const

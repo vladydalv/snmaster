@@ -12,7 +12,7 @@ SpacenerdToneProcessor::SpacenerdToneProcessor()
 {
     for (auto* param : getParameters())
         if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param))
-            params[ranged->getParameterID()] = apvts.getRawParameterValue (ranged->getParameterID());
+            params.add (ranged->getParameterID(), apvts.getRawParameterValue (ranged->getParameterID()));
 }
 
 bool SpacenerdToneProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -51,6 +51,8 @@ void SpacenerdToneProcessor::prepareToPlay (double sampleRate, int samplesPerBlo
     dryBlock.setSize (numCh, samplesPerBlock);
     dryPos = 0;
 
+    scratch.setSize (numCh, samplesPerBlock * (1 << kOsOrder));
+    firstBlock = true;
     inGainSm.reset (fs, 0.03);  outGainSm.reset (fs, 0.03);
     mixSm.reset (fs, 0.03);     wowSm.reset (fs, 0.1);
     inGainSm.setCurrentAndTargetValue (dbToGain (p (inGain)));
@@ -111,21 +113,48 @@ void SpacenerdToneProcessor::processChunk (juce::AudioBuffer<float>& buffer)
 
     float* const* data = buffer.getArrayOfWritePointers();
 
+    // Модулі вмикаються/вимикаються плавно (≈ 20 мс), ручки драйву згладжені (≈ 50 мс)
+    const float step = std::min (1.0f, (float) n / (float) (0.02 * fs));
+    const float kSm = std::min (1.0f, (float) n / (float) (0.05 * fs));
+    if (firstBlock)
+    {
+        trMix = on (trOn) ? 1.0f : 0.0f; tubeMixF = on (tubeOn) ? 1.0f : 0.0f; tapeMixF = on (tapeOn) ? 1.0f : 0.0f;
+        excMixF = on (excOn) ? 1.0f : 0.0f; dsMixF = on (dsOn) ? 1.0f : 0.0f;
+        tubeDriveSm = p (tubeDrive); tubeWetSm = p (tubeMix) * 0.01f; tapeDriveSm = p (tapeDrive);
+        firstBlock = false;
+    }
+    tubeDriveSm += (p (tubeDrive) - tubeDriveSm) * kSm;
+    tubeWetSm   += (p (tubeMix) * 0.01f - tubeWetSm) * kSm;
+    tapeDriveSm += (p (tapeDrive) - tapeDriveSm) * kSm;
+
     // --- Транзієнти (до сатурації: як атака/сустейн інструмента)
-    if (on (trOn))
+    sn::runFaded (trMix, on (trOn), data, numCh, n, step, scratch, [&] (bool fresh)
+    {
+        juce::ignoreUnused (fresh);
         transient.process (data, numCh, n, p (trAttack), p (trSustain));
+    });
 
     // --- 4x: лампа → плівка → ексайтер
     {
         juce::dsp::AudioBlock<float> block (data, (size_t) numCh, (size_t) n);
         auto up = oversampler->processSamplesUp (block);
+        const int on_ = (int) up.getNumSamples();
+        float* os[2] = { up.getChannelPointer (0), numCh > 1 ? up.getChannelPointer (1) : nullptr };
 
-        if (on (tubeOn))
-            tube.process (up, p (tubeDrive), p (tubeBias), p (tubeMix) * 0.01f);
-        if (on (tapeOn))
-            tape.process (up, p (tapeDrive), (int) p (tapeSpeed), 1.0f);
-        if (on (excOn))
+        sn::runFaded (tubeMixF, on (tubeOn), os, numCh, on_, step, scratch, [&] (bool fresh)
+        {
+            if (fresh) tube.reset();
+            tube.process (up, tubeDriveSm, p (tubeBias), tubeWetSm);
+        });
+        sn::runFaded (tapeMixF, on (tapeOn), os, numCh, on_, step, scratch, [&] (bool fresh)
+        {
+            if (fresh) tape.reset();
+            tape.process (up, tapeDriveSm, (int) p (tapeSpeed), 1.0f);
+        });
+        sn::runFaded (excMixF, on (excOn), os, numCh, on_, step, scratch, [&] (bool)
+        {
             exciter.process (up, p (excFreq), p (excAmount));
+        });
 
         oversampler->processSamplesDown (block);
     }
@@ -139,8 +168,13 @@ void SpacenerdToneProcessor::processChunk (juce::AudioBuffer<float>& buffer)
     }
 
     // --- Де-есер (після сатурації, яка підсилює сибілянти)
-    if (on (dsOn))
-        deEssGr.push (deEsser.process (data, numCh, n, p (dsFreq), p (dsSens), p (dsRange), on (dsListen)));
+    float dsGr = 0.0f;
+    sn::runFaded (dsMixF, on (dsOn), data, numCh, n, step, scratch, [&] (bool fresh)
+    {
+        if (fresh) deEsser.reset();
+        dsGr = deEsser.process (data, numCh, n, p (dsFreq), p (dsSens), p (dsRange), on (dsListen));
+    });
+    deEssGr.push (dsGr);
 
     // --- Mix: сухий/мокрий, вирівняні за часом
     mixSm.setTargetValue (p (mix) * 0.01f);

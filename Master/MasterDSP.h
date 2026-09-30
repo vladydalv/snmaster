@@ -135,8 +135,9 @@ public:
 
     /** peaks[i] — пік (true peak) для семпла i, затриманий на detectorDelay.
         Повертає мінімальне підсилення (лінійне) за блок. */
+    /** mix0 → mix1: плавне вмикання/вимикання (0 = обхід, лише затримка). */
     float process (float* const* data, int numCh, int n, const float* peaks,
-                   float ceilingLin, float releaseMs, bool active)
+                   float ceilingLin, float releaseMs, float mix0, float mix1)
     {
         const float relCoef = std::exp (-1.0f / (0.001f * releaseMs * (float) fs));
         const float slowAtk = std::exp (-1.0f / (0.040f * (float) fs));
@@ -150,7 +151,7 @@ public:
             const float pk = std::max ({ peaks[i], p1, p2 });
             p2 = p1; p1 = peaks[i];
 
-            const float req = (active && pk > ceilingLin) ? ceilingLin / pk : 1.0f;
+            const float req = pk > ceilingLin ? ceilingLin / pk : 1.0f;
             const float h = minFilter.push (req);
             boxSum += (double) h - box[(size_t) boxPos];
             box[(size_t) boxPos] = h;
@@ -160,7 +161,8 @@ public:
             g = (s < g) ? s : s + (g - s) * relCoef;
             // Повільна стадія: тримає середнє обмеження на щільному матеріалі (менше пампінгу й спотворень басу)
             gs = (s < gs) ? s + (gs - s) * slowAtk : s + (gs - s) * slowRel;
-            const float gOut = std::min (g, gs);
+            const float mix = mix0 + (mix1 - mix0) * (float) i / (float) n;
+            const float gOut = 1.0f + mix * (std::min (g, gs) - 1.0f);
             minG = std::min (minG, gOut);
 
             const int readPos = (pos + 1) % size;
@@ -169,7 +171,7 @@ public:
                 auto& d = delay[(size_t) ch];
                 d[(size_t) pos] = data[ch][i];
                 const float delayed = d[(size_t) readPos];
-                data[ch][i] = active ? delayed * gOut : delayed;
+                data[ch][i] = delayed * gOut;
             }
             pos = (pos + 1) % size;
         }
