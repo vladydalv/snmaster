@@ -52,6 +52,9 @@ void SpacenerdFeedbackProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     s.morph    = p (morph) * 0.01f;
     s.toneHz   = p (tone);
     s.drift    = p (drift) * 0.01f;
+    s.tuning   = (int) p (tuning);
+    const int os = (int) p (openStr);
+    s.openString = os == 0 ? 0 : 7 - os;   // 1 → 6-та струна … 6 → 1-ша
 
     engine.process (buffer.getArrayOfWritePointers(), numCh, n, s);
 

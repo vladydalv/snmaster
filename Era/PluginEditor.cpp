@@ -104,6 +104,23 @@ void EraPad::paint (Graphics& g)
         }
     }
 
+    // Маркери епох для низу і верху (режим Split)
+    if (proc.apvts.getRawParameterValue (split)->load() > 0.5f)
+    {
+        auto marker = [&] (float yr, const String& tag, Colour c)
+        {
+            const float x = gr.getX() + (yr - 1960.0f + 0.5f) * cw;
+            Path tri;
+            tri.addTriangle (x, gr.getBottom() + 2.0f, x - 6.0f, gr.getBottom() + 11.0f, x + 6.0f, gr.getBottom() + 11.0f);
+            g.setColour (c);
+            g.fillPath (tri);
+            g.setFont (FontOptions (9.0f, Font::bold));
+            g.drawText (tag, Rectangle<float> (x - 20.0f, gr.getBottom() + 11.0f, 40.0f, 10.0f), Justification::centred);
+        };
+        marker (proc.apvts.getRawParameterValue (yearLow)->load(),  "LOW",  eraColour (proc.apvts.getRawParameterValue (yearLow)->load()));
+        marker (proc.apvts.getRawParameterValue (yearHigh)->load(), "HIGH", eraColour (proc.apvts.getRawParameterValue (yearHigh)->load()));
+    }
+
     // Курсор
     const float cx = gr.getX() + (yearVal - 1960.0f + 0.5f) * cw;
     const float cy = gr.getBottom() - (intRow + 0.5f) * rh;
@@ -166,15 +183,82 @@ EraContent::EraContent (SpacenerdEraProcessor& p)
       yearKnob (p.apvts, year, "Year"),
       intKnob  (p.apvts, intensity, "Intensity"),
       mixKnob  (p.apvts, mix, "Mix", false, Theme::accent2),
-      outKnob  (p.apvts, outGain, "Output", true, Theme::accent2)
+      outKnob  (p.apvts, outGain, "Output", true, Theme::accent2),
+      lowKnob  (p.apvts, yearLow, "Low Year"),
+      highKnob (p.apvts, yearHigh, "High Year"),
+      splitButton (p.apvts, split, "SPLIT")
 {
+    splitButton.setTooltip ("Split: bass from one decade, top end from another");
+    refButton.setTooltip ("Analyse a WAV/AIFF/MP3 of a record and move the cursor to its decade (for the chosen genre)");
+    refButton.onClick = [this]
+    {
+        chooser = std::make_unique<FileChooser> ("Reference record", File(), "*.wav;*.aif;*.aiff;*.mp3;*.m4a;*.flac");
+        chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
+                              [this] (const FileChooser& fc) { if (fc.getResult().existsAsFile()) loadReference (fc.getResult()); });
+    };
     matchButton.setTooltip ("Gain Match: compare with Bypass at equal loudness. Turn off before bouncing.");
-    for (auto* c : std::initializer_list<Component*> { &presetBox, &matchButton, &pad, &genreSel, &yearKnob, &intKnob, &mixKnob, &outKnob })
+    for (auto* c : std::initializer_list<Component*> { &presetBox, &matchButton, &pad, &genreSel, &yearKnob, &intKnob, &mixKnob, &outKnob,
+                                                       &lowKnob, &highKnob, &splitButton, &refButton })
         addAndMakeVisible (c);
+}
+
+void EraContent::loadReference (const File& file)
+{
+    if (analysing.exchange (true)) return;
+    refText = "Analysing " + file.getFileName() + "...";
+    repaint();
+    const int genreIdx = (int) proc.apvts.getRawParameterValue (genre)->load();
+    Component::SafePointer<EraContent> safe (this);
+
+    Thread::launch ([safe, file, genreIdx]
+    {
+        AudioFormatManager fm;
+        fm.registerBasicFormats();
+        String text;
+        an::RefResult res;
+        bool ok = false;
+        if (std::unique_ptr<AudioFormatReader> reader (fm.createReaderFor (file)); reader != nullptr)
+        {
+            // До 60 с із середини треку
+            const auto len = reader->lengthInSamples;
+            const int64 want = std::min<int64> (len, (int64) (60.0 * reader->sampleRate));
+            const int64 start = std::max<int64> (0, (len - want) / 2);
+            AudioBuffer<float> buf ((int) std::min<unsigned int> (2u, reader->numChannels), (int) want);
+            reader->read (&buf, 0, (int) want, start, true, true);
+            res = an::matchReference (buf, reader->sampleRate, genreIdx);
+            ok = true;
+            text = file.getFileNameWithoutExtension() + ":  " + String (roundToInt (res.year)) + "  (" + String (res.match) + "% match, "
+                 + String (res.lufs, 1) + " LUFS)";
+        }
+        else
+            text = "Can't read " + file.getFileName();
+
+        MessageManager::callAsync ([safe, text, res, ok]
+        {
+            if (safe == nullptr) return;
+            safe->refText = text;
+            if (ok)
+            {
+                auto set = [&] (const char* id, float v)
+                {
+                    auto* prm = safe->proc.apvts.getParameter (id);
+                    prm->beginChangeGesture();
+                    prm->setValueNotifyingHost (prm->convertTo0to1 (v));
+                    prm->endChangeGesture();
+                };
+                set (year, res.year);
+                set (intensity, 80.0f);
+            }
+            safe->analysing = false;
+            safe->repaint();
+        });
+    });
 }
 
 void EraContent::tick()
 {
+    const float a = proc.apvts.getRawParameterValue (split)->load() > 0.5f ? 1.0f : 0.35f;
+    lowKnob.setAlpha (a); highKnob.setAlpha (a);
     pad.update();
     presetBox.sync();
     for (size_t ch = 0; ch < 2; ++ch) out[ch].feed (sn::gainToDb (proc.outPeak[ch].take()), false);
@@ -201,9 +285,14 @@ void EraContent::paint (Graphics& g)
 
     // Нижній ряд: картки
     auto row = getLocalBounds().withTrimmedTop (56 + 300 + 10).reduced (16, 0).withTrimmedBottom (16).toFloat();
-    drawCard (g, row.removeFromLeft (420.0f), "GENRE");
+    auto genreCard = row.removeFromLeft (380.0f);
+    drawCard (g, genreCard, "GENRE");
+    g.setColour (Theme::muted);
+    g.setFont (FontOptions (11.0f));
+    g.drawFittedText (refText, genreCard.withTrimmedTop (132.0f).reduced (16.0f, 0.0f).withHeight (30.0f).toNearestInt(),
+                      Justification::centredLeft, 2);
     row.removeFromLeft (10.0f);
-    drawCard (g, row.removeFromLeft (390.0f), "CONTROLS");
+    drawCard (g, row.removeFromLeft (500.0f), "CONTROLS");
     row.removeFromLeft (10.0f);
     drawCard (g, row, "OUTPUT");
 
@@ -246,12 +335,17 @@ void EraContent::resized()
     pad.setBounds (r.removeFromTop (300));
     r.removeFromTop (10);
 
-    auto genreCard = r.removeFromLeft (420); r.removeFromLeft (10);
-    genreSel.setBounds (genreCard.withTrimmedTop (40).reduced (14, 0).withSizeKeepingCentre (genreCard.getWidth() - 28, 50));
+    auto genreCard = r.removeFromLeft (380); r.removeFromLeft (10);
+    auto gc = genreCard.withTrimmedTop (48).reduced (14, 0);
+    genreSel.setBounds (gc.removeFromTop (34));
+    gc.removeFromTop (10);
+    refButton.setBounds (gc.removeFromTop (28).withWidth (190));
 
-    auto ctrl = r.removeFromLeft (390).withTrimmedTop (40).reduced (8, 4); r.removeFromLeft (10);
-    const int kw = ctrl.getWidth() / 4;
-    for (auto* k : { &yearKnob, &intKnob, &mixKnob, &outKnob })
+    auto ctrlCard = r.removeFromLeft (500); r.removeFromLeft (10);
+    splitButton.setBounds (ctrlCard.getRight() - 84, ctrlCard.getY() + 8, 70, 22);
+    auto ctrl = ctrlCard.withTrimmedTop (40).reduced (8, 4);
+    const int kw = ctrl.getWidth() / 6;
+    for (auto* k : std::initializer_list<Component*> { &yearKnob, &intKnob, &lowKnob, &highKnob, &mixKnob, &outKnob })
         k->setBounds (ctrl.removeFromLeft (kw).withSizeKeepingCentre (kw, 104));
 
     meterArea = r.withTrimmedTop (44).reduced (12, 10);

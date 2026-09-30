@@ -161,6 +161,28 @@ void Segmented::mouseMove (const MouseEvent& e) { const int h = segmentAt (e.pos
 void Segmented::mouseExit (const MouseEvent&)   { hover = -1; repaint(); }
 
 //==============================================================================
+LabeledCombo::LabeledCombo (APVTS& state, const String& paramId, const String& title)
+{
+    label.setText (title.toUpperCase(), dontSendNotification);
+    label.setFont (FontOptions (10.0f, Font::bold));
+    label.setColour (Label::textColourId, Theme::muted);
+    label.setJustificationType (Justification::centredLeft);
+    addAndMakeVisible (label);
+
+    if (auto* choice = dynamic_cast<AudioParameterChoice*> (state.getParameter (paramId)))
+        box.addItemList (choice->choices, 1);
+    addAndMakeVisible (box);
+    attachment = std::make_unique<APVTS::ComboBoxAttachment> (state, paramId, box);
+}
+
+void LabeledCombo::resized()
+{
+    auto r = getLocalBounds();
+    label.setBounds (r.removeFromTop (14));
+    box.setBounds (r.removeFromTop (26).reduced (2, 0));
+}
+
+//==============================================================================
 Section::Section (APVTS& state, const String& t, const String& powerId, int cols)
     : title (t), columns (cols)
 {

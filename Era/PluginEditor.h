@@ -2,6 +2,8 @@
 
 #include "PluginProcessor.h"
 #include "../Common/Widgets.h"
+#include "../Common/Analysis.h"
+#include <juce_audio_formats/juce_audio_formats.h>
 
 /** Піксельний XY-дисплей: X — рік, Y — інтенсивність. Пікселі мерехтять від музики. */
 class EraPad final : public juce::Component, public juce::SettableTooltipClient
@@ -38,6 +40,8 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void tick();
+    void loadReferenceForTest (const juce::File& f) { loadReference (f); }
+    juce::String getRefText() const { return refText; }
 
 private:
     SpacenerdEraProcessor& proc;
@@ -45,7 +49,13 @@ private:
     snui::PillToggle matchButton;
     EraPad pad;
     snui::Segmented genreSel;
-    snui::Knob yearKnob, intKnob, mixKnob, outKnob;
+    snui::Knob yearKnob, intKnob, mixKnob, outKnob, lowKnob, highKnob;
+    snui::PillToggle splitButton;
+    juce::TextButton refButton { "REFERENCE MATCH..." };
+    juce::String refText { "Load a record you love: Era finds its decade" };
+    std::unique_ptr<juce::FileChooser> chooser;
+    std::atomic<bool> analysing { false };
+    void loadReference (const juce::File&);
     std::array<snui::MeterBar, 2> out;
     snui::MeterBar comp, lim;
     float lufs = -100.0f, push = 0.0f, match = 0.0f;
@@ -60,7 +70,7 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    static constexpr int baseW = 1066, baseH = 560;
+    static constexpr int baseW = 1166, baseH = 560;
 
 private:
     void timerCallback() override { content.tick(); }

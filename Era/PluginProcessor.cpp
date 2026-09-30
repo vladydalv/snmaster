@@ -109,6 +109,8 @@ void SpacenerdEraProcessor::prepareToPlay (double sampleRate, int samplesPerBloc
     programMs = 0.0f; pushState = 0.0f; matchState = 0.0f;
 
     yearSm.reset (fs, 0.08);      yearSm.setCurrentAndTargetValue (p (year));
+    yearLowSm.reset (fs, 0.08);   yearLowSm.setCurrentAndTargetValue (p (yearLow));
+    yearHighSm.reset (fs, 0.08);  yearHighSm.setCurrentAndTargetValue (p (yearHigh));
     intensitySm.reset (fs, 0.08); intensitySm.setCurrentAndTargetValue (p (intensity) * 0.01f);
     mixSm.reset (fs, 0.03);       mixSm.setCurrentAndTargetValue (p (mix) * 0.01f);
     pushSm.reset (fs, 0.05);      pushSm.setCurrentAndTargetValue (1.0f);
@@ -226,7 +228,24 @@ void SpacenerdEraProcessor::processChunk (juce::AudioBuffer<float>& buffer)
     yearSm.setTargetValue (p (year));
     intensitySm.setTargetValue (p (intensity) * 0.01f);
     const float yr = yearSm.skip (n), k = intensitySm.skip (n);
-    const auto target = era::applyIntensity (era::forYear (yr, (int) p (genre)), k);
+    const int gIdx = (int) p (genre);
+    auto eraS = era::forYear (yr, gIdx);
+    if (p (split) > 0.5f)
+    {
+        // Низ (бас, обрізання, моно-бас) — з одного року, верх (яскравість, завал) — з іншого
+        yearLowSm.setTargetValue (p (yearLow));
+        yearHighSm.setTargetValue (p (yearHigh));
+        const auto lo = era::forYear (yearLowSm.skip (n), gIdx);
+        const auto hi = era::forYear (yearHighSm.skip (n), gIdx);
+        eraS.lowCutHz = lo.lowCutHz; eraS.lowDb = lo.lowDb; eraS.lowHz = lo.lowHz; eraS.monoBassHz = lo.monoBassHz;
+        eraS.highDb = hi.highDb; eraS.highHz = hi.highHz; eraS.topLpHz = hi.topLpHz;
+    }
+    else
+    {
+        yearLowSm.setCurrentAndTargetValue (p (yearLow));
+        yearHighSm.setCurrentAndTargetValue (p (yearHigh));
+    }
+    const auto target = era::applyIntensity (eraS, k);
     if (! curValid) { cur = target; curValid = true; updateFilters (cur, true); }
 
     // --- 4x: EQ → компресор → лампа → плівка → кліп

@@ -187,6 +187,27 @@ int main (int argc, char* argv[])
         check (std::abs (cents (f, 146.83)) < 5.0f, "New note retune: " + String (f, 2) + " Hz (D3 146.83)");
     }
 
+    // 6b. Фідбек у паузі (без ноти): Hold, D Standard, 6-та струна, основний тон → D2 73.42 Гц
+    {
+        SpacenerdFeedbackProcessor p; base (p, 0, 20.0f, 0.5f);
+        setParam (p, trigger, 1); setParam (p, tuning, 2); setParam (p, openStr, 1);
+        auto [in, out] = run (p, 5.0, [] (double) { return 0.0f; },
+                              [&] (double t) { setParam (p, hold, t > 0.5 && t < 3.5 ? 1.0f : 0.0f); });
+        const double f = peakFreq (out, 2.0, 3.0, 73.42);
+        const float lvl = sn::gainToDb (rmsAt (out, 2.0, 3.0)), after = sn::gainToDb (rmsAt (out, 4.7, 5.0) + 1e-9f);
+        check (std::abs (cents (f, 73.42)) < 5.0f && lvl > -30.0f && after < lvl - 15.0f,
+               "Open-string feedback (no note): " + String (f, 2) + " Hz, " + String (lvl, 1) + " dBFS, after HOLD off " + String (after, 1) + " dB");
+    }
+    // 6c. Під час фідбеку у паузі зіграли ноту → фідбек переходить на неї
+    {
+        SpacenerdFeedbackProcessor p; base (p, 0, 0.0f, 0.5f);
+        setParam (p, trigger, 2); setParam (p, openStr, 1);
+        auto [in, out] = run (p, 5.0, [] (double t) { return t < 2.0 ? 0.0f : stringSample (110.0, t - 2.0); },
+                              [&] (double t) { setParam (p, hold, t > 0.5 ? 1.0f : 0.0f); });
+        const double f = peakFreq (diff (out, in), 4.0, 5.0, 110.0);
+        check (std::abs (cents (f, 110.0)) < 5.0f, "Open-string → played note A2: " + String (f, 2) + " Hz");
+    }
+
     // 7. Стабільність: шум, акорд, клацання, тиша
     {
         SpacenerdFeedbackProcessor p; p.setCurrentProgram (5);

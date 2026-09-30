@@ -66,6 +66,20 @@ private:
 };
 
 //==============================================================================
+/** Випадний список для choice-параметра з підписом. */
+class LabeledCombo final : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    LabeledCombo (APVTS& state, const juce::String& paramId, const juce::String& title);
+    void resized() override;
+
+private:
+    juce::Label label;
+    juce::ComboBox box;
+    std::unique_ptr<APVTS::ComboBoxAttachment> attachment;
+};
+
+//==============================================================================
 /** Картка модуля: заголовок, кнопка живлення, сітка елементів. */
 class Section final : public juce::Component
 {

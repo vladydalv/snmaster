@@ -1,6 +1,7 @@
 // Офлайн-тести Spacenerd Era.
 #include "../Era/PluginProcessor.h"
 #include "../Era/PluginEditor.h"
+#include "../Common/Analysis.h"
 #include <iostream>
 #include <random>
 
@@ -97,6 +98,8 @@ int main (int argc, char* argv[])
     const auto music = makeMix (0.35f);    // ≈ сирий мікс, пікові ≈ -9 dBFS
     std::cout << "Input: " << String (lufsOf (music, 2.0), 1) << " LUFS" << std::endl;
 
+    const bool quick = SystemStats::getEnvironmentVariable ("ERA_QUICK", {}).isNotEmpty();
+    if (! quick) {
     // 1. Інтенсивність 0 — прозоро: та сама гучність і баланс смуг
     {
         auto out = process (music, [] (SpacenerdEraProcessor& q) { set (q, intensity, 0.0f); });
@@ -176,8 +179,50 @@ int main (int argc, char* argv[])
         check (maxStep < 1.0f, "Sweep year + switch genre while playing: max sample step " + String (maxStep, 3) + " (input " + String (inStep, 3) + ")");
     }
 
-    // 7. Пресети
+    }
+    // 6b. Split: низ з 1965, верх з 2020 — звучить інакше, ніж без Split
     {
+        auto a = process (music, [] (SpacenerdEraProcessor& q) { set (q, year, 1990.0f); set (q, intensity, 90.0f); });
+        auto b = process (music, [] (SpacenerdEraProcessor& q) { set (q, year, 1990.0f); set (q, intensity, 90.0f);
+                                                                 set (q, split, 1.0f); set (q, yearLow, 1965.0f); set (q, yearHigh, 2020.0f); });
+        check (diffDb (b, a) > -30.0f, "Split bands change sound: " + String (diffDb (b, a), 1) + " dB");
+    }
+
+    // 6c. Reference Match: «платівка» зі спектром і гучністю стоунера 1972 → рік поруч з 1972
+    for (float refYear : { 1972.0f, 1998.0f, 2018.0f })
+    {
+        constexpr int N = 1 << 20;
+        std::mt19937 rng (9);
+        std::uniform_real_distribution<float> ph (0.0f, MathConstants<float>::twoPi);
+        dsp::FFT fft (20);
+        const auto curve = an::targetCurve (refYear, 1);
+        AudioBuffer<float> rec (2, N);
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            std::vector<float> spec ((size_t) N * 2, 0.0f);
+            for (int k = 1; k < N / 2; ++k)
+            {
+                const float f = (float) (k * fs / N);
+                if (f < 20.0f || f > 20000.0f) continue;
+                int b = 0; while (b < an::kBands - 2 && an::bandHz[(size_t) b + 1] < f) ++b;
+                const float t = jlimit (0.0f, 1.0f, std::log (f / an::bandHz[(size_t) b]) / std::log (an::bandHz[(size_t) b + 1] / an::bandHz[(size_t) b]));
+                const float db = curve[(size_t) b] + t * (curve[(size_t) b + 1] - curve[(size_t) b]);
+                const float mag = std::pow (10.0f, db / 20.0f) / std::sqrt (f), a = ph (rng);
+                spec[(size_t) (2 * k)] = mag * std::cos (a); spec[(size_t) (2 * k + 1)] = mag * std::sin (a);
+            }
+            fft.performRealOnlyInverseTransform (spec.data());
+            rec.copyFrom (ch, 0, spec.data(), N);
+        }
+        rec.applyGain (0.3f / rec.getMagnitude (0, N));   // реальний діапазон цифрового звуку
+        sn::LoudnessMeter lm; lm.prepare (fs, 2); lm.process (rec);
+        rec.applyGain (sn::dbToGain (era::forYear (refYear, 1).targetLufs - lm.integrated.load()));
+        const auto res = an::matchReference (rec, fs, 1);
+        check (std::abs (res.year - refYear) <= 6.0f, "Reference Match: record like " + String (roundToInt (refYear)) + " -> "
+               + String (roundToInt (res.year)) + " (" + String (res.match) + "%, " + String (res.lufs, 1) + " LUFS)");
+    }
+
+    // 7. Пресети
+    if (! quick) {
         SpacenerdEraProcessor probe;
         for (int i = 0; i < probe.getNumPrograms(); ++i)
         {

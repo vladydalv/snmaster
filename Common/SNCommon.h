@@ -36,6 +36,38 @@ struct OnePole
 };
 
 //==============================================================================
+/** Черга стерео-семплів аудіопотік → інтерфейс без блокувань (один писач, один читач). */
+class StereoFifo
+{
+public:
+    StereoFifo() : fifo (kSize) { buf.setSize (2, kSize); buf.clear(); }
+
+    void push (const float* l, const float* r, int n) noexcept
+    {
+        int s1, n1, s2, n2;
+        fifo.prepareToWrite (n, s1, n1, s2, n2);           // якщо читач не встигає — зайве відкидається
+        if (n1 > 0) { buf.copyFrom (0, s1, l, n1); buf.copyFrom (1, s1, r != nullptr ? r : l, n1); }
+        if (n2 > 0) { buf.copyFrom (0, s2, l + n1, n2); buf.copyFrom (1, s2, (r != nullptr ? r : l) + n1, n2); }
+        fifo.finishedWrite (n1 + n2);
+    }
+
+    /** Забрати все накопичене; callback (const float* l, const float* r, int n). */
+    template <typename Fn> void pull (Fn&& fn)
+    {
+        int s1, n1, s2, n2;
+        fifo.prepareToRead (fifo.getNumReady(), s1, n1, s2, n2);
+        if (n1 > 0) fn (buf.getReadPointer (0, s1), buf.getReadPointer (1, s1), n1);
+        if (n2 > 0) fn (buf.getReadPointer (0, s2), buf.getReadPointer (1, s2), n2);
+        fifo.finishedRead (n1 + n2);
+    }
+
+private:
+    static constexpr int kSize = 1 << 16;
+    juce::AbstractFifo fifo;
+    juce::AudioBuffer<float> buf;
+};
+
+//==============================================================================
 /** Біквад (TDF-II, double) з формулами RBJ Audio EQ Cookbook.
     Перерахунок коефіцієнтів не виділяє пам'ять — безпечно в аудіопотоці і для плавної автоматизації. */
 struct Biquad
@@ -90,6 +122,16 @@ struct Biquad
         set (al, 0.0, -al, 1 + al, -2 * cs, 1 - al);
     }
     void setBypass() noexcept { b0 = 1; b1 = b2 = a1 = a2 = 0; }
+
+    /** АЧХ фільтра на частоті f (дБ). */
+    double magnitudeDb (double fs, double f) const noexcept
+    {
+        const double w = 2.0 * juce::MathConstants<double>::pi * f / fs;
+        const double c1 = std::cos (w), s1 = std::sin (w), c2 = std::cos (2 * w), s2 = std::sin (2 * w);
+        const double nr = b0 + b1 * c1 + b2 * c2, ni = -(b1 * s1 + b2 * s2);
+        const double dr = 1 + a1 * c1 + a2 * c2, di = -(a1 * s1 + a2 * s2);
+        return 10.0 * std::log10 ((nr * nr + ni * ni) / std::max (dr * dr + di * di, 1e-30));
+    }
 
 private:
     static double w0 (double fs, double f) noexcept

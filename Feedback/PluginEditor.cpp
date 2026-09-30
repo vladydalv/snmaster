@@ -63,7 +63,9 @@ void FeedbackStatusPanel::paint (Graphics& g)
     const bool active = bloom > 0.01f;
     String state;
     Colour stateColour = Theme::muted;
-    if (active)                       { state = String (targetHz, 1) + " Hz"; stateColour = Theme::muted; }
+    if (active && proc.engine.openActive.load()) { state = "open string  " + String (targetHz, 1) + " Hz"; stateColour = Theme::accent2; }
+    else if (active)                  { state = String (targetHz, 1) + " Hz"; stateColour = Theme::muted; }
+    else if (mode != 0 && ! holdOn && ! listening) { state = "HOLD = open-string feedback"; stateColour = Theme::gr; }
     else if (mode == 1 && ! holdOn)   { state = "press HOLD"; stateColour = Theme::gr; }
     else if (progress > 0.0f)         { state = "sustain the note..."; stateColour = Theme::accent2; }
     else if (listening)               { state = "waiting"; }
@@ -132,6 +134,10 @@ FeedbackContent::FeedbackContent (SpacenerdFeedbackProcessor& p)
     holdBtn->setTooltip ("Step up to the cabinet: starts feedback on the ringing note (automate it in Logic)");
     trig.add (std::move (holdBtn), 2, 34);
     trig.add (std::make_unique<Knob> (s, delay, "Delay"), 2);
+    auto tun = std::make_unique<LabeledCombo> (s, tuning, "Open: tuning");
+    tun->setTooltip ("HOLD with no note played: feedback from open strings, like leaning the guitar into the cabinet");
+    trig.add (std::move (tun), 1, 42);
+    trig.add (std::make_unique<LabeledCombo> (s, openStr, "String"), 1, 42);
 
     harm.add (std::make_unique<Segmented> (s, harmonic), 2, 34);
     harm.knob (s, tone,  "Tone");

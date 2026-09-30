@@ -47,6 +47,7 @@ public:
     sn::LoudnessMeter loudness, inLoudness;
     std::atomic<float> truePeakMax { 0.0f };   // лінійний, від останнього скидання
     std::atomic<float> matchDb { 0.0f };        // поточна корекція Gain Match
+    sn::StereoFifo inFifo, outFifo;             // для аналізатора в інтерфейсі
 
 private:
     float p (const char* id) const { return params.at (id)->load (std::memory_order_relaxed); }

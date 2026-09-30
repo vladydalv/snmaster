@@ -2,6 +2,7 @@
 
 #include "PluginProcessor.h"
 #include "../Common/Widgets.h"
+#include "AnalyzerPanel.h"
 
 //==============================================================================
 class MeterPanel final : public juce::Component
@@ -33,6 +34,7 @@ public:
     void tick();
 
     MeterPanel meters;
+    AnalyzerPanel analyzer;
 
 private:
     SpacenerdMasterProcessor& proc;
@@ -52,7 +54,8 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    static constexpr int baseW = 1166, baseH = 486;
+    static constexpr int baseW = 1166, baseH = 736;
+    static constexpr int analyzerH = 240;
 
 private:
     void timerCallback() override { content.tick(); }

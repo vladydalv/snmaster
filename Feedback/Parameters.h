@@ -14,6 +14,8 @@ namespace FbIDs
     inline constexpr auto tone     = "tone";
     inline constexpr auto drift    = "drift";
     inline constexpr auto outGain  = "outGain";
+    inline constexpr auto tuning   = "tuning";    // стрій для фідбеку у паузах
+    inline constexpr auto openStr  = "openStr";   // яка відкрита струна «заводиться»
 }
 
 inline juce::AudioProcessorValueTreeState::ParameterLayout createFeedbackLayout()
@@ -53,5 +55,9 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createFeedbackLayout(
     l.add (std::make_unique<F> (id (tone),     "Tone",     skew (800.0f, 8000.0f, 2500.0f), 2500.0f, hz));
     l.add (std::make_unique<F> (id (drift),    "Drift",    lin (0.0f, 100.0f), 25.0f, pct));
     l.add (std::make_unique<F> (id (outGain),  "Output",   lin (-24.0f, 12.0f), 0.0f, dB));
+    l.add (std::make_unique<AudioParameterChoice> (id (tuning), "Tuning",
+                StringArray { "E Standard", "Eb Standard", "D Standard", "Drop D", "C Standard", "Drop C", "Drop B" }, 0));
+    l.add (std::make_unique<AudioParameterChoice> (id (openStr), "Open String",
+                StringArray { "Auto", "6th (low)", "5th", "4th", "3rd", "2nd", "1st (high)" }, 0));
     return l;
 }

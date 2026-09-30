@@ -166,7 +166,7 @@ void SpacenerdMasterProcessor::processChunk (juce::AudioBuffer<float>& buffer)
         buffer.clear (ch, 0, n);
 
     const bool match = on (ParamIDs::gainMatch);
-    if (match) inLoudness.process (buffer);   // гучність оригіналу (те, що звучить у Bypass)
+    inLoudness.process (buffer);   // гучність оригіналу (для Gain Match і Assist)
 
     // --- Вхід
     inGainSm.setTargetValue (dbToGain (p (ParamIDs::inGain)));
@@ -174,6 +174,7 @@ void SpacenerdMasterProcessor::processChunk (juce::AudioBuffer<float>& buffer)
 
     for (int ch = 0; ch < numCh; ++ch)
         inPeak[(size_t) ch].push (buffer.getMagnitude (ch, 0, n));
+    inFifo.push (buffer.getReadPointer (0), numCh > 1 ? buffer.getReadPointer (1) : nullptr, n);
 
     // --- 4x: EQ → компресор → сатурація
     {
@@ -269,6 +270,7 @@ void SpacenerdMasterProcessor::processChunk (juce::AudioBuffer<float>& buffer)
     truePeakMax.store (tp);
 
     loudness.process (buffer);
+    outFifo.push (buffer.getReadPointer (0), numCh > 1 ? buffer.getReadPointer (1) : nullptr, n);
 
     // --- Gain Match: прибирає різницю гучності для чесного порівняння з Bypass (метри її не бачать)
     float target = 0.0f;
@@ -295,7 +297,9 @@ void SpacenerdMasterProcessor::setCurrentProgram (int index)
     for (auto* param : getParameters())
     {
         auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param);
-        if (ranged == nullptr || ranged->getParameterID() == ParamIDs::gainMatch) continue;   // моніторинг, не звук
+        const auto pid = ranged != nullptr ? ranged->getParameterID() : juce::String();
+        if (ranged == nullptr || pid == ParamIDs::gainMatch || pid == ParamIDs::targetGenre || pid == ParamIDs::targetDecade)
+            continue;   // моніторинг і ціль аналізатора — не частина звуку пресету
 
         float value = ranged->getDefaultValue();
         for (const auto& [id, v] : preset.values)

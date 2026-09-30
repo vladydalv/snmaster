@@ -50,6 +50,10 @@ namespace ParamIDs
 
     // Порівняння на однаковій гучності
     inline constexpr auto gainMatch = "gainMatch";
+
+    // Ціль аналізатора
+    inline constexpr auto targetGenre  = "targetGenre";
+    inline constexpr auto targetDecade = "targetDecade";
 }
 
 namespace ParamText
@@ -140,6 +144,10 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     layout.add (std::make_unique<F> (id (ParamIDs::limRel),  "Lim Release", range (1.0f, 500.0f, 60.0f), 60.0f, ms));
 
     layout.add (std::make_unique<B> (id (ParamIDs::gainMatch), "Gain Match", false));
+    layout.add (std::make_unique<AudioParameterChoice> (id (ParamIDs::targetGenre), "Target Genre",
+                    StringArray { "Rock", "Stoner", "Psych", "Space", "Grunge" }, 1));
+    layout.add (std::make_unique<AudioParameterChoice> (id (ParamIDs::targetDecade), "Target Decade",
+                    StringArray { "1960s", "1970s", "1980s", "1990s", "2000s", "2010s", "2020s" }, 3));
 
     return layout;
 }

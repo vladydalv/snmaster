@@ -3,7 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 #include "Parameters.h"
-#include "EraModel.h"
+#include "../Common/EraModel.h"
 #include "../Master/MasterDSP.h"
 
 class SpacenerdEraProcessor final : public juce::AudioProcessor
@@ -83,7 +83,7 @@ private:
     juce::AudioBuffer<float> dryDelay, dryBlock;
     int dryPos = 0;
 
-    juce::SmoothedValue<float> yearSm, intensitySm, mixSm;
+    juce::SmoothedValue<float> yearSm, intensitySm, mixSm, yearLowSm, yearHighSm;
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> pushSm, outGainSm, matchSm;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpacenerdEraProcessor)

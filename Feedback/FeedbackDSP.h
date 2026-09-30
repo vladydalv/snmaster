@@ -244,7 +244,21 @@ public:
         int harmonic = 3;        // 0 Tone, 1 Octave, 2 Fifth (3-тя гармоніка), 3 Auto
         float distance = 0.4f;   // 0…1
         float amount = 0.7f, morph = 0.5f, toneHz = 2500.0f, drift = 0.25f;
+        int tuning = 0;          // стрій для фідбеку у паузах (див. openStringHz)
+        int openString = 0;      // 0 Auto, 1…6 = струна (6 — найнижча)
     };
+
+    /** Частоти відкритих струн (6-та … 1-ша) для строїв, популярних у стоунері й думі. */
+    static float openStringHz (int tuning, int stringNumber)
+    {
+        static const float std[6] { 82.41f, 110.0f, 146.83f, 196.0f, 246.94f, 329.63f };     // E A D G B E
+        //                       E Std  Eb Std  D Std  Drop D  C Std  Drop C  Drop B
+        static const int shiftAll[7]   { 0, -1, -2,  0, -4, -2, -3 };
+        static const int shiftSixth[7] { 0,  0,  0, -2,  0, -2, -2 };
+        const int t = juce::jlimit (0, 6, tuning), sIdx = juce::jlimit (1, 6, stringNumber);
+        const int semis = shiftAll[t] + (sIdx == 6 ? shiftSixth[t] : 0);
+        return std[6 - sIdx] * std::pow (2.0f, (float) semis / 12.0f);
+    }
 
     void prepare (double sampleRate)
     {
@@ -261,7 +275,7 @@ public:
     {
         pitch.reset(); loop.reset(); driftLp.reset();
         envF = envS = 0.0f; noteActive = false; f0 = 0.0f; timer = 0; noteRef = 0.0f;
-        state = State::idle; bloom = 0.0f; bp.reset(); byHold = false; sinceOnset = 1 << 30;
+        state = State::idle; bloom = 0.0f; bp.reset(); byHold = false; openMode = false; sinceOnset = 1 << 30;
         muteHold = 0; driftCounter = 0; driftCents = 0.0f; wobble = 0.0f;
         targetHz.store (0.0f); detectedHz.store (0.0f); bloomLevel.store (0.0f);
     }
@@ -309,10 +323,18 @@ public:
             // --- Тригери
             const bool autoOk = autoMode && noteActive && timer > (int) (effDelay * fs);
             const bool holdOk = holdMode && s.hold && noteActive && f0 > 0.0f;
-            if ((autoOk || holdOk) && state != State::blooming)
+            // Фідбек у паузі: гітара з відкритими (не заглушеними) струнами біля кабінету
+            const bool openOk = holdMode && s.hold && ! noteActive;
+            if ((autoOk || holdOk) && (state != State::blooming || openMode))
             {
+                openMode = false;
                 start (s);
                 byHold = holdOk && ! autoOk;
+            }
+            else if (openOk && state != State::blooming)
+            {
+                startOpen (s);
+                byHold = true;
             }
 
             if (state == State::blooming)
@@ -327,7 +349,7 @@ public:
             else if (state == State::releasing)
             {
                 bloom *= slowRelease ? relSlow : relFast;
-                if (bloom < 1.0e-4f) { bloom = 0.0f; state = State::idle; loop.reset(); }
+                if (bloom < 1.0e-4f) { bloom = 0.0f; state = State::idle; openMode = false; loop.reset(); }
             }
 
             // --- Дрейф висоти й рівня (рух гітариста біля кабінету)
@@ -345,7 +367,8 @@ public:
             if (state != State::idle)
             {
                 const float inj = 0.6f * bp.process (x);
-                fb = loop.process (inj) * bloom * levelScale * noteRefPeak() * (1.0f + wobble);
+                const float ref = openMode ? kOpenLevel : noteRefPeak();
+                fb = loop.process (inj) * bloom * levelScale * ref * (1.0f + wobble);
             }
 
             const float dry = 1.0f - 0.85f * s.morph * bloom;
@@ -358,15 +381,17 @@ public:
         const bool counting = autoMode && noteActive && state != State::blooming;
         sustainProgress.store (counting ? juce::jlimit (0.0f, 1.0f, (float) timer / (float) (effDelay * fs)) : 0.0f);
         listening.store (noteActive && envS > kGate);
+        openActive.store (openMode && state != State::idle);
     }
 
     // Стан для інтерфейсу
     std::atomic<float> detectedHz { 0.0f }, targetHz { 0.0f }, bloomLevel { 0.0f };
     std::atomic<int> starts { 0 };
     std::atomic<float> inputDb { -100.0f }, sustainProgress { 0.0f };
-    std::atomic<bool> listening { false };   // діагностика: скільки разів фідбек запускався з нуля
+    std::atomic<bool> listening { false }, openActive { false };   // діагностика: скільки разів фідбек запускався з нуля
 
 private:
+    static constexpr float kOpenLevel = 0.18f;   // рівень фідбеку у паузі (≈ -15 dBFS пік при Amount 70 %)
     static constexpr float kGate = 0.0005f;  // ≈ -66 dBFS (середнє |x|): працює і з тихим DI-входом
 
     float noteRefPeak() const noexcept { return noteRef * 1.5708f; }  // середнє |x| → амплітуда
@@ -428,6 +453,29 @@ private:
 
     void release() { state = State::releasing; slowRelease = false; }
 
+    void startOpen (const Settings& s)
+    {
+        int str = s.openString;
+        if (str < 1 || str > 6)
+        {
+            // Найчастіше «підхоплюються» середні струни
+            const float r = rng.nextFloat();
+            str = r < 0.3f ? 4 : r < 0.6f ? 3 : r < 0.8f ? 5 : 6;
+        }
+        const float f = openStringHz (s.tuning, str);
+        const int m = chooseMultiple (s.harmonic, f);
+        curTarget = f * (float) m;
+        targetHz.store (curTarget);
+        detectedHz.store (f);
+        bp.setBandPass (fs, curTarget, 4.0);
+        loop.setFrequency (curTarget, s.toneHz);
+        if (state == State::idle) { loop.reset(); starts.fetch_add (1); }
+        state = State::blooming;
+        slowRelease = false;
+        openMode = true;
+        bloom = std::max (bloom, 0.002f);
+    }
+
     double fs = 48000.0;
     PitchDetector pitch;
     FeedbackLoop loop;
@@ -436,7 +484,7 @@ private:
     juce::Random rng { 0xfeedb };
 
     float fA = 0, fR = 0, sA = 0, sR = 0, envF = 0, envS = 0;
-    bool noteActive = false, byHold = false, slowRelease = false;
+    bool noteActive = false, byHold = false, slowRelease = false, openMode = false;
     float f0 = 0.0f, noteRef = 0.0f, curTarget = 0.0f;
     int timer = 0, sinceOnset = 1 << 30, muteHold = 0, multChosen = 0;
     State state = State::idle;
