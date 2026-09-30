@@ -32,6 +32,7 @@ void SpacenerdStompProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     const double osFs = fs * (1 << kOsOrder);
 
     pedal.prepare (osFs, numCh);
+    octaver.prepare (fs);
     mod.prepare (fs);
     echo.prepare (fs);
 
@@ -71,6 +72,17 @@ float SpacenerdStompProcessor::echoTimeMs (double bpm) const
     return juce::jlimit (40.0f, 2400.0f, (float) (60000.0 / bpm) * beats[s]);
 }
 
+void SpacenerdStompProcessor::runOctaver (float* const* data, int numCh, int n, double bpm)
+{
+    const bool active = on (octOn);
+    if (! active && octaver.isIdle()) { trackedHz.store (0.0f); return; }
+    // Вимкнено — плавно гасимо октави і повертаємо сухий сигнал (без клацання)
+    const st::Octaver::Settings os { active ? p (sub1) : 0.0f, active ? p (sub2) : 0.0f, active ? p (octUp) : 0.0f, active ? p (octDry) : 100.0f,
+                                     p (octChar), p (octTone), p (bloom), p (wobble), syncedRate (bpm) };
+    octaver.process (data, numCh, n, os);
+    trackedHz.store (octaver.getTrackedHz());
+}
+
 void SpacenerdStompProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
@@ -95,6 +107,7 @@ void SpacenerdStompProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     {
         static constexpr double perBeat[] { 0.0, 1.0, 2.0, 3.0, 4.0 };
         mod.setPhase (*ppq * perBeat[s]);
+        octaver.setWobblePhase (*ppq * perBeat[s]);
     }
 
     const int total = buffer.getNumSamples();
@@ -126,6 +139,10 @@ void SpacenerdStompProcessor::processChunk (juce::AudioBuffer<float>& buffer)
         for (int i = 0; i < n; ++i)
             o[i] = numCh > 1 ? 0.5f * (data[0][i] + data[1][i]) : data[0][i];
     }
+
+    // --- Октавер до драйву (класика: октава «в» фуз)
+    const bool octPre = (int) p (octPos) == 0;
+    if (octPre) runOctaver (data, numCh, n, bpm);
 
     // Цілі
     const bool driveActive = on (driveOn);
@@ -215,6 +232,9 @@ void SpacenerdStompProcessor::processChunk (juce::AudioBuffer<float>& buffer)
 
     for (int ch = 0; ch < numCh; ++ch)
         buffer.addFrom (ch, 0, lowBlock, ch, 0, n);
+
+    // --- Октавер після драйву (чистіший трекінг, октави не спотворюються)
+    if (! octPre) runOctaver (data, numCh, n, bpm);
 
     // --- Модуляція
     {

@@ -45,6 +45,23 @@ private:
     juce::Rectangle<int> barsArea;
 };
 
+/** Яку ноту зараз «чує» аналоговий трекер октавера. */
+class TrackView final : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    explicit TrackView (SpacenerdStompProcessor& p) : proc (p)
+    {
+        setTooltip ("Note the Analog engine is tracking. Play single notes for the cleanest sub; chords: turn Character towards Poly.");
+    }
+    void update();
+    void paint (juce::Graphics&) override;
+
+private:
+    SpacenerdStompProcessor& proc;
+    float shownHz = 0.0f;
+    int holdFrames = 0;
+};
+
 class StompContent final : public juce::Component
 {
 public:
@@ -57,7 +74,8 @@ private:
     SpacenerdStompProcessor& proc;
     snui::PresetBox presetBox;
     StompPad pad;
-    snui::Section drive, modSec, echoSec;
+    snui::Section drive, octSec, modSec, echoSec;
+    TrackView* trackView = nullptr;
     OutputPanel output;
 };
 
@@ -69,7 +87,7 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    static constexpr int baseW = 1112, baseH = 612;
+    static constexpr int baseW = 1112, baseH = 802;
     void tickForTest() { content.tick(); }
 
 private:

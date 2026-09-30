@@ -203,11 +203,42 @@ void OutputPanel::resized()
 }
 
 //==============================================================================
+void TrackView::update()
+{
+    const float hz = proc.trackedHz.load();
+    if (hz > 0.0f) { shownHz = hz; holdFrames = 20; }
+    else if (holdFrames > 0 && --holdFrames == 0) shownHz = 0.0f;
+    repaint();
+}
+
+void TrackView::paint (Graphics& g)
+{
+    auto r = getLocalBounds().toFloat();
+    g.setColour (Theme::muted);
+    g.setFont (FontOptions (10.0f, Font::bold));
+    g.drawText ("TRACKING", r.removeFromTop (14.0f), Justification::centred);
+    auto box = r.reduced (4.0f, 2.0f);
+    g.setColour (Theme::track);
+    g.fillRoundedRectangle (box, 6.0f);
+    String txt ("--");
+    if (shownHz > 0.0f)
+    {
+        static const char* names[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+        const int midi = roundToInt (69.0f + 12.0f * std::log2 (shownHz / 440.0f));
+        txt = String (names[(midi % 12 + 12) % 12]) + String (midi / 12 - 1);
+    }
+    g.setColour (shownHz > 0.0f ? Theme::good : Theme::muted);
+    g.setFont (FontOptions (14.0f, Font::bold));
+    g.drawText (txt, box, Justification::centred);
+}
+
+//==============================================================================
 StompContent::StompContent (SpacenerdStompProcessor& p)
     : proc (p),
       presetBox (p),
       pad (p),
       drive   (p.apvts, "DRIVE", driveOn, 3),
+      octSec  (p.apvts, "OCTAVE", octOn, 10),
       modSec  (p.apvts, "MODULATION", modOn, 8),
       echoSec (p.apvts, "TAPE ECHO", echoOn, 5),
       output (p)
@@ -220,6 +251,17 @@ StompContent::StompContent (SpacenerdStompProcessor& p)
     drive.knob (s, battery, "Battery");
     drive.knob (s, cleanBass, "Clean Bass");
     drive.knob (s, level, "Level", true);
+
+    octSec.add (std::make_unique<Segmented> (s, octPos, "Position"), 1, 44);
+    trackView = static_cast<TrackView*> (&octSec.add (std::make_unique<TrackView> (p), 1, 44));
+    octSec.knob (s, sub1, "Sub -1");
+    octSec.knob (s, sub2, "Sub -2");
+    octSec.knob (s, octUp, "Up +1");
+    octSec.knob (s, octDry, "Dry");
+    octSec.knob (s, octChar, "Character");
+    octSec.knob (s, octTone, "Tone");
+    octSec.knob (s, bloom, "Bloom");
+    octSec.knob (s, wobble, "Wobble");
 
     // 8 колонок: режими ширші (назви не обрізаються), ручки — по 2 колонки
     modSec.add (std::make_unique<Segmented> (s, modMode, "Mode"), 5, 44);
@@ -236,20 +278,21 @@ StompContent::StompContent (SpacenerdStompProcessor& p)
     echoSec.knob (s, wear, "Wear");
     echoSec.knob (s, echoMix, "Mix");
 
-    for (auto* c : std::initializer_list<Component*> { &presetBox, &pad, &drive, &modSec, &echoSec, &output })
+    for (auto* c : std::initializer_list<Component*> { &presetBox, &pad, &drive, &octSec, &modSec, &echoSec, &output })
         addAndMakeVisible (c);
 }
 
 void StompContent::tick()
 {
     pad.update (output.update());
+    if (trackView != nullptr) trackView->update();
     presetBox.sync();
 }
 
 void StompContent::paint (Graphics& g)
 {
     g.fillAll (Theme::bg);
-    drawHeader (g, getWidth(), "STOMP", "CIRCUIT MORPH > MODULATION > TAPE ECHO   |   4x oversampled");
+    drawHeader (g, getWidth(), "STOMP", "OCTAVE > CIRCUIT MORPH > MODULATION > TAPE ECHO   |   4x oversampled");
 }
 
 void StompContent::resized()
@@ -266,6 +309,8 @@ void StompContent::resized()
 
     output.setBounds (r.removeFromRight (180));
     r.removeFromRight (gap);
+    octSec.setBounds (r.removeFromTop (180));
+    r.removeFromTop (gap);
     const int half = (r.getWidth() - gap) / 2;
     modSec.setBounds (r.removeFromLeft (half));
     r.removeFromLeft (gap);

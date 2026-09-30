@@ -40,7 +40,7 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
     std::array<sn::AtomicMax, 2> inPeak, outPeak;
-    std::atomic<float> lfoView { 0.0f }, bpmView { 0.0f };
+    std::atomic<float> lfoView { 0.0f }, bpmView { 0.0f }, trackedHz { 0.0f };
 
 private:
     float p (const char* id) const { return params.at (id)->load (std::memory_order_relaxed); }
@@ -48,12 +48,14 @@ private:
     void processChunk (juce::AudioBuffer<float>&);
     float syncedRate (double bpm) const;
     float echoTimeMs (double bpm) const;
+    void runOctaver (float* const* data, int numCh, int n, double bpm);
 
     std::map<juce::String, std::atomic<float>*> params;
     std::atomic<int> currentPreset { 0 };
     int maxBlock = 512;
 
     st::Pedal pedal;
+    st::Octaver octaver;
     st::Modulator mod;
     st::Echo echo;
     std::unique_ptr<juce::dsp::Oversampling<float>> oversampler;

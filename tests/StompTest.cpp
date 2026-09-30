@@ -234,6 +234,7 @@ int main (int argc, char* argv[])
         auto out = run (noise, [] (SpacenerdStompProcessor& p)
         {
             set (p, driveOn, 1); set (p, circuit, 2.7f); set (p, gain, 100); set (p, battery, 100); set (p, cleanBass, 300);
+            set (p, octOn, 1); set (p, sub1, 100); set (p, sub2, 100); set (p, octUp, 100); set (p, octChar, 50); set (p, wobble, 100); set (p, bloom, 300);
             set (p, modOn, 1); set (p, modMode, 1); set (p, rate, 15); set (p, depth, 100); set (p, shape, 100);
             set (p, echoOn, 1); set (p, feedback, 95); set (p, wear, 100); set (p, echoMix, 100); set (p, echoTime, 60);
         });
@@ -250,11 +251,71 @@ int main (int argc, char* argv[])
         check (ok, String (p.getNumPrograms()) + " presets load");
     }
 
-    // 11. Знімок інтерфейсу
+    // 11. Октавер: висота кожного голосу, обидва двигуни
+    {
+        // Гітарна нота з гармоніками, 110 Гц (A2)
+        const int n = (int) (fs * 1.5);
+        AudioBuffer<float> note (2, n);
+        for (int i = 0; i < n; ++i)
+        {
+            float v = 0.0f;
+            for (int h = 1; h <= 6; ++h) v += 0.15f / (float) h * (float) std::sin (MathConstants<double>::twoPi * 110.0 * h * i / fs);
+            note.setSample (0, i, v); note.setSample (1, i, v);
+        }
+        const float fund = amp (note, 0, 110.0, 0.5, 1.5);
+        struct Case { const char* name; float s1, s2, up, chr; double f; };
+        for (auto cs : { Case { "analog -1", 100, 0, 0, 100, 55.0 }, Case { "analog -2", 0, 100, 0, 100, 27.5 }, Case { "analog +1", 0, 0, 100, 100, 220.0 },
+                         Case { "poly -1", 100, 0, 0, 0, 55.0 },     Case { "poly -2", 0, 100, 0, 0, 27.5 },     Case { "poly +1", 0, 0, 100, 0, 220.0 } })
+        {
+            auto out = run (note, [cs] (SpacenerdStompProcessor& p)
+            {
+                set (p, octOn, 1); set (p, octDry, 0); set (p, sub1, cs.s1); set (p, sub2, cs.s2); set (p, octUp, cs.up);
+                set (p, octChar, cs.chr); set (p, octTone, 8000);
+            });
+            const float target = amp (out, 0, cs.f, 0.5, 1.5);
+            const float rel = sn::gainToDb (target / fund);
+            check (finite (out) && rel > -9.0f, String (cs.name) + ": " + String (cs.f, 1) + " Hz at " + String (rel, 1) + " dB re input fundamental");
+        }
+
+        // Poly тримає акорд: A2 + E3 → суб обох нот
+        const auto chord = sine ({ { 110.0, 0.12f }, { 164.81, 0.12f } }, 1.5);
+        auto poly = run (chord, [] (SpacenerdStompProcessor& p) { set (p, octOn, 1); set (p, octDry, 0); set (p, sub1, 100); set (p, octChar, 0); set (p, octTone, 8000); });
+        const float a55 = sn::gainToDb (amp (poly, 0, 55.0, 0.5, 1.5) / 0.12f), a82 = sn::gainToDb (amp (poly, 0, 82.4, 0.5, 1.5) / 0.12f);
+        check (a55 > -9.0f && a82 > -9.0f, "poly chord sub: 55 Hz " + String (a55, 1) + " dB, 82.4 Hz " + String (a82, 1) + " dB");
+
+        // Аналоговий суб мовчить у тиші (без «бубніння»)
+        AudioBuffer<float> silence (2, (int) fs); silence.clear();
+        auto quiet = run (silence, [] (SpacenerdStompProcessor& p) { set (p, octOn, 1); set (p, octChar, 100); set (p, sub1, 100); set (p, sub2, 100); });
+        check (quiet.getMagnitude (0, quiet.getNumSamples()) < 1.0e-4f, "analog sub silent on silence");
+
+        // Bloom: октава наростає після атаки
+        auto bl = run (note, [] (SpacenerdStompProcessor& p) { set (p, octOn, 1); set (p, octDry, 0); set (p, sub1, 100); set (p, octChar, 0); set (p, bloom, 500); });
+        const float early = rmsDb (bl, 0, 0.0, 0.05), late = rmsDb (bl, 0, 1.2, 1.5);
+        check (late > early + 8.0f, "bloom swells: " + String (early, 1) + " -> " + String (late, 1) + " dB");
+
+        // Wobble: рівень октави «дихає» з частотою LFO
+        auto wb = run (note, [] (SpacenerdStompProcessor& p)
+        {
+            set (p, octOn, 1); set (p, octDry, 0); set (p, octUp, 100); set (p, octChar, 100); set (p, octTone, 6000);
+            set (p, wobble, 100); set (p, rate, 4.0f);
+        });
+        float mn = 100.0f, mx = -100.0f;
+        for (double t = 0.3; t < 1.45; t += 0.01) { const float v = rmsDb (wb, 0, t, t + 0.01); mn = std::min (mn, v); mx = std::max (mx, v); }
+        check (finite (wb) && mx - mn > 8.0f, "wobble sweeps: " + String (mx - mn, 1) + " dB swing");
+
+        // Вимкнений октавер прозорий
+        int lat = 0;
+        auto off = run (note, [] (SpacenerdStompProcessor& p) { set (p, octOn, 0); set (p, sub1, 100); }, nullptr, &lat);
+        double e = 0, d = 0;
+        for (int i = 4800; i < n - lat; ++i) { const float df = off.getSample (0, i + lat) - note.getSample (0, i); e += df * df; d += note.getSample (0, i) * note.getSample (0, i); }
+        check (10.0 * std::log10 (e / d + 1e-20) < -50.0, "octave off: transparent");
+    }
+
+    // 12. Знімок інтерфейсу
     if (argc > 1)
     {
         SpacenerdStompProcessor p;
-        p.setCurrentProgram (12);
+        p.setCurrentProgram (18);
         p.setRateAndBufferSizeDetails (fs, 512);
         p.prepareToPlay (fs, 512);
         std::unique_ptr<AudioProcessorEditor> ed (p.createEditor());
@@ -262,7 +323,7 @@ int main (int argc, char* argv[])
         MidiBuffer m;
         for (int k = 0; k < 10; ++k)
         {
-            AudioBuffer<float> chunk (buf.getArrayOfWritePointers(), 2, 0, 512);
+            AudioBuffer<float> chunk (buf.getArrayOfWritePointers(), 2, k * 512, 512);
             p.processBlock (chunk, m);
             dynamic_cast<SpacenerdStompEditor*> (ed.get())->tickForTest();
         }

@@ -12,6 +12,17 @@ namespace StompIDs
     inline constexpr auto battery   = "battery";
     inline constexpr auto cleanBass = "cleanBass";  // Hz, мін = Off
     inline constexpr auto level     = "level";
+    // Octave
+    inline constexpr auto octOn     = "octOn";
+    inline constexpr auto octPos    = "octPos";     // Pre / Post (до чи після драйву)
+    inline constexpr auto sub1      = "sub1";       // −1 октава
+    inline constexpr auto sub2      = "sub2";       // −2 октави
+    inline constexpr auto octUp     = "octUp";      // +1 октава
+    inline constexpr auto octDry    = "octDry";
+    inline constexpr auto octChar   = "octChar";    // Poly ↔ Analog
+    inline constexpr auto octTone   = "octTone";
+    inline constexpr auto bloom     = "bloom";      // октави наростають після атаки
+    inline constexpr auto wobble    = "wobble";     // фільтр на октавах, що «гуляє» з LFO модуляції
     // Modulation
     inline constexpr auto modOn     = "modOn";
     inline constexpr auto modMode   = "modMode";    // Tremolo / Harmonic / Pan / Vibrato
@@ -66,6 +77,21 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createStompLayout()
     l.add (std::make_unique<F> (id (battery), "Battery", lin (0.0f, 100.0f), 0.0f, pct));
     l.add (std::make_unique<F> (id (cleanBass), "Clean Bass", skew (40.0f, 400.0f, 120.0f), 40.0f, bassText));
     l.add (std::make_unique<F> (id (level),   "Level",   lin (-24.0f, 12.0f), 0.0f, dB));
+
+    const auto charText = A().withStringFromValueFunction ([] (float v, int)
+    {
+        return v < 3.0f ? String ("Poly") : v > 97.0f ? String ("Analog") : String (roundToInt (100.0f - v)) + "/" + String (roundToInt (v));
+    });
+    l.add (std::make_unique<B> (id (octOn), "Octave On", false));
+    l.add (std::make_unique<C> (id (octPos), "Octave Position", StringArray { "Pre", "Post" }, 0));
+    l.add (std::make_unique<F> (id (sub1),   "Sub -1",   lin (0.0f, 100.0f), 70.0f, pct));
+    l.add (std::make_unique<F> (id (sub2),   "Sub -2",   lin (0.0f, 100.0f), 0.0f, pct));
+    l.add (std::make_unique<F> (id (octUp),  "Up +1",    lin (0.0f, 100.0f), 0.0f, pct));
+    l.add (std::make_unique<F> (id (octDry), "Octave Dry", lin (0.0f, 100.0f), 100.0f, pct));
+    l.add (std::make_unique<F> (id (octChar), "Character", lin (0.0f, 100.0f), 50.0f, charText));
+    l.add (std::make_unique<F> (id (octTone), "Octave Tone", skew (150.0f, 8000.0f, 1500.0f), 2500.0f, hz));
+    l.add (std::make_unique<F> (id (bloom),  "Bloom",    skew (0.0f, 2000.0f, 300.0f), 0.0f, ms));
+    l.add (std::make_unique<F> (id (wobble), "Wobble",   lin (0.0f, 100.0f), 0.0f, pct));
 
     l.add (std::make_unique<B> (id (modOn), "Mod On", false));
     l.add (std::make_unique<C> (id (modMode), "Mod Mode", StringArray { "Tremolo", "Harmonic", "Pan", "Vibrato" }, 0));
