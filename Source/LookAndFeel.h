@@ -37,7 +37,15 @@ public:
         setColour (juce::TextButton::buttonColourId, Theme::track);
         setColour (juce::TextButton::textColourOffId, Theme::muted);
         setColour (juce::TextButton::textColourOnId, Theme::text);
-        setColour (juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
+        setColour (juce::ComboBox::outlineColourId, Theme::border);
+        setColour (juce::ComboBox::backgroundColourId, Theme::card);
+        setColour (juce::ComboBox::textColourId, Theme::text);
+        setColour (juce::ComboBox::arrowColourId, Theme::accent);
+        setColour (juce::ComboBox::focusedOutlineColourId, Theme::accent);
+        setColour (juce::PopupMenu::backgroundColourId, Theme::card);
+        setColour (juce::PopupMenu::textColourId, Theme::text);
+        setColour (juce::PopupMenu::highlightedBackgroundColourId, Theme::accent.withAlpha (0.25f));
+        setColour (juce::PopupMenu::highlightedTextColourId, Theme::text);
     }
 
     void drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
@@ -109,6 +117,9 @@ public:
         g.setColour (Theme::track.brighter (down ? 0.2f : over ? 0.1f : 0.0f));
         g.fillRoundedRectangle (r, 5.0f);
     }
+
+    juce::Font getComboBoxFont (juce::ComboBox&) override { return juce::FontOptions (13.0f, juce::Font::bold); }
+    juce::Font getPopupMenuFont() override { return juce::FontOptions (14.0f); }
 
     juce::Font getTextButtonFont (juce::TextButton&, int) override { return juce::FontOptions (11.0f, juce::Font::bold); }
 };

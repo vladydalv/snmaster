@@ -233,6 +233,38 @@ void SpacenerdMasterProcessor::processChunk (juce::AudioBuffer<float>& buffer)
     loudness.process (buffer);
 }
 
+void SpacenerdMasterProcessor::setCurrentProgram (int index)
+{
+    const auto& presets = getFactoryPresets();
+    if (index < 0 || index >= (int) presets.size()) return;
+
+    const auto& preset = presets[(size_t) index];
+    for (auto* param : getParameters())
+    {
+        auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param);
+        if (ranged == nullptr) continue;
+
+        float value = ranged->getDefaultValue();
+        for (const auto& [id, v] : preset.values)
+            if (ranged->getParameterID() == id)
+                value = ranged->convertTo0to1 (v);
+
+        ranged->beginChangeGesture();
+        ranged->setValueNotifyingHost (value);
+        ranged->endChangeGesture();
+    }
+
+    currentPreset.store (index);
+    apvts.state.setProperty ("preset", index, nullptr);
+    loudness.requestReset();
+}
+
+const juce::String SpacenerdMasterProcessor::getProgramName (int index)
+{
+    const auto& presets = getFactoryPresets();
+    return index >= 0 && index < (int) presets.size() ? juce::String (presets[(size_t) index].name) : juce::String();
+}
+
 void SpacenerdMasterProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     if (auto xml = apvts.copyState().createXml())
@@ -243,7 +275,10 @@ void SpacenerdMasterProcessor::setStateInformation (const void* data, int sizeIn
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (apvts.state.getType()))
+        {
             apvts.replaceState (juce::ValueTree::fromXml (*xml));
+            currentPreset.store ((int) apvts.state.getProperty ("preset", 0));
+        }
 }
 
 juce::AudioProcessorEditor* SpacenerdMasterProcessor::createEditor()

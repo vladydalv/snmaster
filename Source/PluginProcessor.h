@@ -4,6 +4,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include "Parameters.h"
 #include "DSP.h"
+#include "Presets.h"
 
 class SpacenerdMasterProcessor final : public juce::AudioProcessor
 {
@@ -26,10 +27,10 @@ public:
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 0.0; }
 
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return {}; }
+    int getNumPrograms() override { return (int) getFactoryPresets().size(); }
+    int getCurrentProgram() override { return currentPreset.load(); }
+    void setCurrentProgram (int index) override;
+    const juce::String getProgramName (int index) override;
     void changeProgramName (int, const juce::String&) override {}
 
     void getStateInformation (juce::MemoryBlock& destData) override;
@@ -46,6 +47,7 @@ private:
     float p (const char* id) const { return params.at (id)->load (std::memory_order_relaxed); }
     bool on (const char* id) const { return p (id) > 0.5f; }
     void updateEq();
+    std::atomic<int> currentPreset { 0 };
     void processChunk (juce::AudioBuffer<float>&);
     int maxBlock = 512;
 

@@ -78,8 +78,11 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     MeterPanel meters;
+    void syncPreset();
 
 private:
+    SpacenerdMasterProcessor& proc;
+    juce::ComboBox presetBox;
     Section eq, comp, sat, width, lim;
 };
 
@@ -96,7 +99,7 @@ public:
     static constexpr int baseW = 1146, baseH = 452;
 
 private:
-    void timerCallback() override { content.meters.update(); }
+    void timerCallback() override { content.meters.update(); content.syncPreset(); }
 
     SpacenerdLookAndFeel lnf;
     MainContent content;

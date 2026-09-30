@@ -279,6 +279,7 @@ void MeterPanel::resized()
 //==============================================================================
 MainContent::MainContent (SpacenerdMasterProcessor& p)
     : meters (p),
+      proc (p),
       eq    (p.apvts, "EQ",         ParamIDs::eqOn,    4),
       comp  (p.apvts, "COMPRESSOR", ParamIDs::compOn,  4),
       sat   (p.apvts, "SATURATION", ParamIDs::satOn,   2),
@@ -319,8 +320,27 @@ MainContent::MainContent (SpacenerdMasterProcessor& p)
     lim.add (k (ParamIDs::ceiling, "Ceiling"));
     lim.add (k (ParamIDs::limRel,  "Release"));
 
+    for (int i = 0; i < p.getNumPrograms(); ++i)
+        presetBox.addItem (p.getProgramName (i), i + 1);
+    presetBox.setTooltip ("Factory presets");
+    presetBox.onChange = [this]
+    {
+        const int idx = presetBox.getSelectedId() - 1;
+        if (idx >= 0 && idx != proc.getCurrentProgram())
+            proc.setCurrentProgram (idx);
+    };
+    syncPreset();
+    addAndMakeVisible (presetBox);
+
     for (auto* c : std::initializer_list<Component*> { &eq, &comp, &sat, &width, &lim, &meters })
         addAndMakeVisible (c);
+}
+
+void MainContent::syncPreset()
+{
+    const int id = proc.getCurrentProgram() + 1;
+    if (presetBox.getSelectedId() != id)
+        presetBox.setSelectedId (id, dontSendNotification);
 }
 
 void MainContent::paint (Graphics& g)
@@ -343,10 +363,16 @@ void MainContent::paint (Graphics& g)
     g.setFont (FontOptions (11.0f));
     g.drawText ("EQ  >  COMP  >  SAT  >  STEREO  >  LIMIT     4x oversampled",
                 getWidth() - 440, 14, 420, 28, Justification::centredRight);
+
+    g.setColour (Theme::muted);
+    g.setFont (FontOptions (10.0f, Font::bold));
+    g.drawText ("PRESET", 240, 14, 56, 28, Justification::centredRight);
 }
 
 void MainContent::resized()
 {
+    presetBox.setBounds (300, 14, 240, 28);
+
     auto r = getLocalBounds().withTrimmedTop (56).reduced (16, 0).withTrimmedBottom (16);
     constexpr int gap = 10;
 

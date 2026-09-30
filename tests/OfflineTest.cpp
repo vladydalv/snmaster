@@ -213,6 +213,34 @@ int main (int argc, char* argv[])
         check (std::abs (lvl) < 0.2f, "Flat response @ " + String (f) + " Hz: " + String (lvl, 3) + " dB");
     }
 
+    // 9. Пресети: застосовуються, звучать без збоїв, тримають стелю
+    {
+        SpacenerdMasterProcessor probe;
+        for (int i = 0; i < probe.getNumPrograms(); ++i)
+        {
+            SpacenerdMasterProcessor p;
+            p.setCurrentProgram (i);
+            std::mt19937 rng ((unsigned) i);
+            std::normal_distribution<float> nd (0.0f, 0.2f);
+            auto out = run (p, 48000.0, 20, [&] (AudioBuffer<float>& b, int64 start)
+            {
+                for (int k = 0; k < b.getNumSamples(); ++k)
+                {
+                    const double t = (double) (start + k) / 48000.0;
+                    const float bass = 0.3f * (float) std::sin (2.0 * MathConstants<double>::pi * 55.0 * t);
+                    b.setSample (0, k, bass + nd (rng)); b.setSample (1, k, bass + nd (rng));
+                }
+            });
+            const int n = out.getNumSamples();
+            const float pk = std::max (out.getMagnitude (0, 0, n), out.getMagnitude (1, 0, n));
+            const float thr = p.apvts.getRawParameterValue (ParamIDs::threshold)->load();
+            const float expectThr = i == 0 ? -12.0f : thr;
+            check (pk <= sn::dbToGain (-1.0f) + 1e-6f && std::abs (thr - expectThr) < 0.01f && p.getCurrentProgram() == i,
+                   "Preset '" + p.getProgramName (i) + "': peak " + String (sn::gainToDb (pk), 2)
+                   + " dBFS, " + String (p.loudness.integrated.load(), 1) + " LUFS");
+        }
+    }
+
     // 7. Стан зберігається і відновлюється
     {
         SpacenerdMasterProcessor a, b;
@@ -229,7 +257,7 @@ int main (int argc, char* argv[])
     if (argc > 1)
     {
         SpacenerdMasterProcessor p;
-        setParam (p, ParamIDs::satOn, 1.0f);
+        p.setCurrentProgram (2);
         run (p, 48000.0, 4, [] (AudioBuffer<float>& b, int64 start)
         {
             for (int i = 0; i < b.getNumSamples(); ++i)
