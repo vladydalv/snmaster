@@ -54,8 +54,8 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    static constexpr int baseW = 1166, baseH = 806;
-    static constexpr int analyzerH = 310;
+    static constexpr int baseW = 1166, baseH = 846;
+    static constexpr int analyzerH = 350;
 
 private:
     void timerCallback() override { content.tick(); }

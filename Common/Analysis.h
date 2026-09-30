@@ -72,11 +72,22 @@ public:
         fftData.assign ((size_t) size * 2, 0.0f);
         ring.assign ((size_t) size, 0.0f);
         ringPos = 0; filled = 0; sinceFrame = 0;
-        avgPow.fill (0.0f); instDb.fill (-120.0f); learnPow.fill (0.0); learnFrames = 0;
+        avgPow.fill (0.0f); instDb.fill (-120.0f); learnPow.fill (0.0); learnFrames = 0; resetSong();
         corrNum = corrL = corrR = 0.0; lowMid = lowSide = 0.0;
         lpL.setLowPass (fs, 150.0, 0.707); lpR.setLowPass (fs, 150.0, 0.707);
         framesSeen = 0;
     }
+
+    /** Весь трек: середній спектр усіх кадрів із сигналом від останнього скидання (тиша не рахується). */
+    void resetSong() { songPow.fill (0.0); songFrames = 0; }
+    Spectrum song() const
+    {
+        Spectrum s;
+        for (int b = 0; b < kBands; ++b)
+            s[(size_t) b] = (float) (10.0 * std::log10 (std::max (songPow[(size_t) b] / std::max (1, songFrames), 1e-14)));
+        return s;
+    }
+    double songSeconds() const noexcept { return songFrames * (double) (size / 4) / fs; }
 
     void setLearning (bool on) { if (on && ! learning) { learnPow.fill (0.0); learnFrames = 0; } learning = on; }
     bool isLearning() const noexcept { return learning; }
@@ -93,7 +104,7 @@ public:
             filled = std::min (filled + 1, size);
 
             // Кореляція (повільне середнє) і стерео в басу
-            constexpr double a = 0.9999;
+            constexpr double a = 0.99999;     // ≈ 2 с: стабільні показники стерео
             corrNum = a * corrNum + (1 - a) * (double) L * R;
             corrL = a * corrL + (1 - a) * (double) L * L;
             corrR = a * corrR + (1 - a) * (double) R * R;
@@ -151,9 +162,17 @@ private:
             const float pw = (float) p * norm;
             avgPow[(size_t) b] += frameAvg * (pw - avgPow[(size_t) b]);
             instDb[(size_t) b] = 10.0f * std::log10 (std::max (pw, 1e-14f));
+            instPow[(size_t) b] = pw;
             if (learning) learnPow[(size_t) b] += pw;
         }
         if (learning) ++learnFrames;
+        double tot = 0.0;
+        for (int b = 0; b < kBands; ++b) tot += instPow[(size_t) b];
+        if (tot > 1.0e-8)                                  // ≈ -80 dBFS: тишу між піснями не враховуємо
+        {
+            for (int b = 0; b < kBands; ++b) songPow[(size_t) b] += instPow[(size_t) b];
+            ++songFrames;
+        }
         ++framesSeen;
     }
 
@@ -162,8 +181,9 @@ private:
     std::vector<float> window, fftData, ring;
     int ringPos = 0, filled = 0, sinceFrame = 0, framesSeen = 0;
     Spectrum avgPow {}, instDb {};
-    std::array<double, kBands> learnPow {};
-    int learnFrames = 0;
+    std::array<double, kBands> learnPow {}, songPow {};
+    std::array<float, kBands> instPow {};
+    int learnFrames = 0, songFrames = 0;
     bool learning = false;
     double corrNum = 0, corrL = 0, corrR = 0, lowMid = 0, lowSide = 0;
     sn::Biquad lpL, lpR;
@@ -284,7 +304,7 @@ inline RefResult matchReference (const juce::AudioBuffer<float>& audio, double f
 
     RefResult r;
     r.lufs = lm.integrated.load();
-    const auto ref = normalise (a.average());
+    const auto ref = normalise (a.song());          // увесь файл, а не останні пів секунди
     float best = 1e9f;
     for (float y = 1960.0f; y <= 2025.0f; y += 0.5f)
     {

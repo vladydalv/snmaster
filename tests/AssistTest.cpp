@@ -122,10 +122,14 @@ int main()
     }
     check (mudFound && quietFound && monoFound, "Analyzer finds mud, low loudness and wide bass");
 
-    // Learn 10 с + Assist
-    for (auto* c : mc->analyzer.getChildren())
-        if (auto* b = dynamic_cast<TextButton*> (c); b != nullptr && b->getButtonText().startsWith ("LEARN")) b->onClick();
-    play (11.0);
+    // Стабільність: оцінка всього треку не «стрибає» (два виміри з інтервалом 3 с)
+    {
+        const int m1 = an.getReport().matchPercent;
+        play (3.0);
+        const int m2 = an.getReport().matchPercent;
+        check (std::abs (m1 - m2) <= 2, "Whole-track verdict is stable: " + String (m1) + "% -> " + String (m2) + "%");
+        check (an.listenedSeconds() > 14.0, "Listened time accumulates: " + String (an.listenedSeconds(), 1) + " s");
+    }
     an.applyAssist();
     p.resetMeters();
     play (16.0);
