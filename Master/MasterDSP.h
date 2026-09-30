@@ -19,7 +19,7 @@ public:
 
     void reset()
     {
-        envDb = slowDb = 0.0f;
+        envDb = 0.0f; activity = 0.0f;
         for (auto& f : scFilters) f.reset();
     }
 
@@ -38,9 +38,10 @@ public:
 
         const float aA = std::exp (-1.0f / (0.001f * s.attackMs  * (float) fs));
         const float aR = std::exp (-1.0f / (0.001f * s.releaseMs * (float) fs));
-        // Auto release: повільна обвідна з повільною атакою утримує лише тривалу компресію
-        const float sA = std::exp (-1.0f / (0.001f * (10.0f * s.attackMs + 60.0f) * (float) fs));
-        const float sR = std::exp (-1.0f / (0.001f * (5.0f * s.releaseMs) * (float) fs));
+        // Auto release (програмно-залежний): чим довше триває компресія, тим повільніший реліз (до 5x).
+        // Короткі удари відпускаються швидко, щільний матеріал — плавно, без пампінгу.
+        const float actCoef = std::exp (-1.0f / (0.3f * (float) fs));
+        const float lnR = std::log (std::max (aR, 1.0e-30f));
         const float slope = 1.0f / s.ratio - 1.0f;
         const float W = s.kneeDb;
         const float makeup = dbToGain (s.makeupDb);
@@ -67,16 +68,16 @@ public:
             else                              gc = slope * over;
 
             const float target = -gc;
-            const float a = target > envDb ? aA : aR;
-            envDb = a * envDb + (1.0f - a) * target;
-
-            float gr = envDb;
+            float rel = aR;
             if (s.autoRelease)
             {
-                const float b = target > slowDb ? sA : sR;
-                slowDb = b * slowDb + (1.0f - b) * target;
-                gr = std::max (envDb, slowDb);
+                const float busy = target > 0.5f ? 1.0f : 0.0f;
+                activity = busy + actCoef * (activity - busy);
+                rel = std::exp (lnR / (1.0f + 4.0f * activity));   // час релізу × (1…5)
             }
+            const float a = target > envDb ? aA : rel;
+            envDb = a * envDb + (1.0f - a) * target;
+            const float gr = envDb;
 
             maxGr = std::max (maxGr, gr);
             const float g = dbToGain (-gr) * makeup;
@@ -93,7 +94,7 @@ public:
 
 private:
     double fs = 44100.0;
-    float envDb = 0.0f, slowDb = 0.0f;
+    float envDb = 0.0f, activity = 0.0f;
     float lastScFreq = -1.0f;
     std::array<Biquad, 2> scFilters;
 };

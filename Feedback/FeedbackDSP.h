@@ -354,13 +354,20 @@ public:
         }
 
         bloomLevel.store (bloom);
+        inputDb.store (gainToDb (envS * 1.5708f));
+        const bool counting = autoMode && noteActive && state != State::blooming;
+        sustainProgress.store (counting ? juce::jlimit (0.0f, 1.0f, (float) timer / (float) (effDelay * fs)) : 0.0f);
+        listening.store (noteActive && envS > kGate);
     }
 
     // Стан для інтерфейсу
     std::atomic<float> detectedHz { 0.0f }, targetHz { 0.0f }, bloomLevel { 0.0f };
+    std::atomic<int> starts { 0 };
+    std::atomic<float> inputDb { -100.0f }, sustainProgress { 0.0f };
+    std::atomic<bool> listening { false };   // діагностика: скільки разів фідбек запускався з нуля
 
 private:
-    static constexpr float kGate = 0.003f;   // ≈ -50 dBFS
+    static constexpr float kGate = 0.0005f;  // ≈ -66 dBFS (середнє |x|): працює і з тихим DI-входом
 
     float noteRefPeak() const noexcept { return noteRef * 1.5708f; }  // середнє |x| → амплітуда
 
@@ -413,7 +420,7 @@ private:
         targetHz.store (curTarget);
         bp.setBandPass (fs, curTarget, 4.0);
         loop.setFrequency (curTarget, s.toneHz);
-        if (state == State::idle) loop.reset();
+        if (state == State::idle) { loop.reset(); starts.fetch_add (1); }
         state = State::blooming;
         slowRelease = false;
         bloom = std::max (bloom, 0.002f);

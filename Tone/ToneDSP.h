@@ -69,10 +69,12 @@ public:
     {
         fs = osRate;
         ch.assign ((size_t) numChannels, {});
+        envAtk = (float) std::exp (-1.0 / (0.001 * fs));
+        envRel = (float) std::exp (-1.0 / (0.05 * fs));
         lastFreq = -1.0f;
     }
 
-    void reset() { for (auto& c : ch) { c.pre.reset(); c.post.reset(); } }
+    void reset() { for (auto& c : ch) { c.pre.reset(); c.post.reset(); c.env = 0.0f; } }
 
     void process (juce::dsp::AudioBlock<float>& block, float freq, float amountPct)
     {
@@ -83,7 +85,9 @@ public:
             lastFreq = freq;
         }
 
-        constexpr float drive = 4.0f, bias = 0.2f;
+        // Генерація гармонік не залежить від рівня: смугу нормуємо обвідною,
+        // насичуємо, повертаємо рівень. Інакше тихі верхи майже не «збуджуються».
+        constexpr float drive = 2.5f, bias = 0.25f;
         const float tb = std::tanh (bias);
         const float lin = 1.0f / (drive * (1.0f - tb * tb));
         const float amt = 2.0f * amountPct * 0.01f;
@@ -95,18 +99,22 @@ public:
             for (size_t i = 0; i < block.getNumSamples(); ++i)
             {
                 const float h = st.pre.process (d[i]);
-                const float shaped = (std::tanh (drive * h + bias) - tb) * lin;
-                const float harmonics = st.post.process (shaped - h);   // лише продукти нелінійності
+                const float ah = std::abs (h);
+                st.env = ah > st.env ? ah + envAtk * (st.env - ah) : ah + envRel * (st.env - ah);
+                const float e = std::max (st.env * 1.5708f, 1.0e-5f);
+                const float u = h / e;
+                const float shaped = (std::tanh (drive * u + bias) - tb) * lin;
+                const float harmonics = st.post.process ((shaped - u) * e);   // лише продукти нелінійності
                 d[i] += amt * harmonics;
             }
         }
     }
 
 private:
-    struct Channel { Biquad pre, post; };
+    struct Channel { Biquad pre, post; float env = 0.0f; };
     std::vector<Channel> ch;
     double fs = 176400.0;
-    float lastFreq = -1.0f;
+    float lastFreq = -1.0f, envAtk = 0.0f, envRel = 0.0f;
 };
 
 //==============================================================================

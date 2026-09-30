@@ -3,6 +3,7 @@
 using namespace juce;
 using namespace snui;
 using namespace FbIDs;
+using snui::MeterBar;
 
 static String noteName (float hz)
 {
@@ -21,9 +22,14 @@ FeedbackStatusPanel::FeedbackStatusPanel (SpacenerdFeedbackProcessor& p)
 
 void FeedbackStatusPanel::update()
 {
-    noteHz   = proc.engine.detectedHz.load();
-    targetHz = proc.engine.targetHz.load();
-    bloom    = proc.engine.bloomLevel.load();
+    noteHz    = proc.engine.detectedHz.load();
+    targetHz  = proc.engine.targetHz.load();
+    bloom     = proc.engine.bloomLevel.load();
+    progress  = proc.engine.sustainProgress.load();
+    inDb      = proc.engine.inputDb.load();
+    listening = proc.engine.listening.load();
+    mode      = (int) proc.apvts.getRawParameterValue (trigger)->load();
+    holdOn    = proc.apvts.getRawParameterValue (hold)->load() > 0.5f;
     out.feed (sn::gainToDb (proc.outPeak.take()), false);
     repaint();
 }
@@ -33,47 +39,74 @@ void FeedbackStatusPanel::paint (Graphics& g)
     drawCard (g, getLocalBounds().toFloat(), "STATUS");
     auto r = infoArea.toFloat();
 
-    auto labelled = [&] (const String& tag, const String& big, const String& small, Colour c)
+    auto labelled = [&] (const String& tag, const String& big, const String& small, Colour c, Colour smallColour)
     {
-        auto line = r.removeFromTop (54.0f);
+        auto line = r.removeFromTop (52.0f);
         g.setColour (Theme::muted);
         g.setFont (FontOptions (10.0f, Font::bold));
         g.drawText (tag, line.removeFromTop (14.0f), Justification::centredLeft);
         g.setColour (c);
         g.setFont (FontOptions (26.0f, Font::bold));
         g.drawText (big, line.removeFromLeft (64.0f), Justification::centredLeft);
-        g.setColour (Theme::muted);
+        g.setColour (smallColour);
         g.setFont (FontOptions (12.0f));
         g.drawText (small, line, Justification::centredLeft);
     };
 
-    labelled ("STRING", noteName (noteHz), noteHz > 0.0f ? String (noteHz, 1) + " Hz" : String(), Theme::text);
-    labelled ("FEEDBACK", bloom > 0.01f ? noteName (targetHz) : String ("--"),
-              bloom > 0.01f ? String (targetHz, 1) + " Hz" : String ("waiting"), Theme::accent);
+    // Струна: що чує плагін
+    const bool quiet = inDb < -55.0f;
+    const String stringInfo = ! listening ? (quiet ? String ("play a note") : String ("no clear pitch"))
+                                          : String (noteHz, 1) + " Hz";
+    labelled ("STRING", listening ? noteName (noteHz) : String ("--"), stringInfo, Theme::text, Theme::muted);
 
-    // Наростання фідбеку
-    r.removeFromTop (8.0f);
-    g.setColour (Theme::muted);
-    g.setFont (FontOptions (10.0f, Font::bold));
-    g.drawText ("BLOOM", r.removeFromTop (14.0f), Justification::centredLeft);
-    auto bar = r.removeFromTop (10.0f);
-    g.setColour (Theme::track.withAlpha (0.7f));
-    g.fillRoundedRectangle (bar, 5.0f);
-    if (bloom > 0.001f)
+    // Фідбек: що відбувається і чого він чекає
+    const bool active = bloom > 0.01f;
+    String state;
+    Colour stateColour = Theme::muted;
+    if (active)                       { state = String (targetHz, 1) + " Hz"; stateColour = Theme::muted; }
+    else if (mode == 1 && ! holdOn)   { state = "press HOLD"; stateColour = Theme::gr; }
+    else if (progress > 0.0f)         { state = "sustain the note..."; stateColour = Theme::accent2; }
+    else if (listening)               { state = "waiting"; }
+    else                              { state = "--"; }
+    labelled ("FEEDBACK", active ? noteName (targetHz) : String ("--"), state, Theme::accent, stateColour);
+
+    // Смуга: відлік до зриву (Auto) або наростання фідбеку
+    auto bigBar = [&] (const String& tag, float value, Colour a, Colour b)
     {
-        g.setGradientFill (ColourGradient (Theme::accent, bar.getX(), 0.0f, Theme::gr, bar.getRight(), 0.0f, false));
-        g.fillRoundedRectangle (bar.withWidth (jmax (10.0f, bar.getWidth() * bloom)), 5.0f);
-    }
+        g.setColour (Theme::muted);
+        g.setFont (FontOptions (10.0f, Font::bold));
+        g.drawText (tag, r.removeFromTop (14.0f), Justification::centredLeft);
+        auto bar = r.removeFromTop (10.0f);
+        g.setColour (Theme::track.withAlpha (0.7f));
+        g.fillRoundedRectangle (bar, 5.0f);
+        if (value > 0.001f)
+        {
+            g.setGradientFill (ColourGradient (a, bar.getX(), 0.0f, b, bar.getRight(), 0.0f, false));
+            g.fillRoundedRectangle (bar.withWidth (jmax (10.0f, bar.getWidth() * jmin (1.0f, value))), 5.0f);
+        }
+        r.removeFromTop (10.0f);
+    };
+    if (active || progress <= 0.0f) bigBar ("BLOOM", bloom, Theme::accent, Theme::gr);
+    else                            bigBar ("SUSTAIN", progress, Theme::accent2, Theme::accent);
 
-    r.removeFromTop (14.0f);
-    g.setColour (Theme::muted);
-    g.drawText ("OUT", r.removeFromTop (14.0f), Justification::centredLeft);
-    auto meter = r.removeFromTop (8.0f);
-    const float frac = jlimit (0.0f, 1.0f, (out.value + 48.0f) / 48.0f);
-    g.setColour (Theme::track.withAlpha (0.7f));
-    g.fillRoundedRectangle (meter, 4.0f);
-    g.setColour (out.value > -1.0f ? Theme::hot : Theme::good);
-    g.fillRoundedRectangle (meter.withWidth (meter.getWidth() * frac), 4.0f);
+    // Рівні входу й виходу
+    auto small = [&] (const String& tag, float db, bool warnLow)
+    {
+        auto line = r.removeFromTop (14.0f);
+        g.setColour (warnLow ? Theme::gr : Theme::muted);
+        g.setFont (FontOptions (10.0f, Font::bold));
+        g.drawText (tag, line.removeFromLeft (70.0f), Justification::centredLeft);
+        g.drawText (db > -99.0f ? String (roundToInt (db)) + " dB" : String ("-inf"), line, Justification::centredRight);
+        auto m = r.removeFromTop (6.0f);
+        g.setColour (Theme::track.withAlpha (0.7f));
+        g.fillRoundedRectangle (m, 3.0f);
+        const float frac = jlimit (0.0f, 1.0f, (db + 72.0f) / 72.0f);
+        g.setColour (warnLow ? Theme::gr : (db > -1.0f ? Theme::hot : Theme::good));
+        g.fillRoundedRectangle (m.withWidth (m.getWidth() * frac), 3.0f);
+        r.removeFromTop (6.0f);
+    };
+    small (quiet && inDb > -99.0f ? "IN (LOW)" : "IN", inDb, quiet && inDb > -99.0f);
+    small ("OUT", out.value, false);
 }
 
 void FeedbackStatusPanel::resized()

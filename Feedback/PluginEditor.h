@@ -13,7 +13,9 @@ public:
 
 private:
     SpacenerdFeedbackProcessor& proc;
-    float noteHz = 0.0f, targetHz = 0.0f, bloom = 0.0f;
+    float noteHz = 0.0f, targetHz = 0.0f, bloom = 0.0f, progress = 0.0f, inDb = -100.0f;
+    bool listening = false, holdOn = false;
+    int mode = 0;
     snui::MeterBar out;
     juce::Rectangle<int> infoArea;
     snui::Knob outKnob;
