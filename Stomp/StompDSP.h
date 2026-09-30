@@ -442,6 +442,178 @@ private:
     juce::Random rng { 0xec40 };
 };
 //==============================================================================
+/** Спектральний поліфонічний октав-ап (у дусі POG): STFT ≈ 43 мс, пошук піків спектра, кожен пік разом зі своєю
+    «областю» бінів переноситься на нову частоту (×2, ×4), фаза прив'язана до піку (Laroche–Dolson, 1999).
+    Кожна нота акорду — свої піки, тож акорди тримаються; сухий сигнал не затримується, октави вгору звучать ≈ на 43 мс пізніше.
+    Октави вниз цим методом на низьких нотах гітари/баса неможливі без дуже довгого вікна (гармоніки нової ноти
+    ближчі за роздільну здатність), тому −1/−2 у двигуні Spectral беруться з поліфонічного банку фільтрів (без затримки).
+    Detune — дві злегка розстроєні копії для +1/+2 (об'єм, як у поліфонічних октаверах). */
+class SpectralOctaver
+{
+public:
+    static constexpr int kVoices = 2;                       // +1, +2
+    static constexpr double ratios[kVoices] { 2.0, 4.0 };
+
+    void prepare (double sampleRate)
+    {
+        fs = sampleRate;
+        order = (sampleRate > 70000.0 ? 11 : 10) + extraOrder;
+        N = 1 << order; R = N / 4; H = N / 2;
+        fft = std::make_unique<juce::dsp::FFT> (order);
+        win.resize ((size_t) N);
+        for (int i = 0; i < N; ++i) win[(size_t) i] = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * i / N);
+        inRing.assign ((size_t) N, 0.0f);
+        frame.assign ((size_t) N * 2, 0.0f);
+        mag.assign ((size_t) H + 1, 0.0f); phs.assign ((size_t) H + 1, 0.0f); prevPhs.assign ((size_t) H + 1, 0.0f);
+        peaks.reserve ((size_t) H); regionLo.reserve ((size_t) H); regionHi.reserve ((size_t) H); peakW.reserve ((size_t) H);
+        for (auto& v : voice) { v.acc.assign ((size_t) N, 0.0f); v.outBlock.assign ((size_t) R, 0.0f); }
+        for (auto& p : outPhase) p.assign ((size_t) H + 1, 0.0f);
+        for (auto& y : ybuf) y.assign ((size_t) N * 2, 0.0f);
+        reset();
+    }
+
+    void reset()
+    {
+        std::fill (inRing.begin(), inRing.end(), 0.0f);
+        std::fill (prevPhs.begin(), prevPhs.end(), 0.0f);
+        for (auto& v : voice) { std::fill (v.acc.begin(), v.acc.end(), 0.0f); std::fill (v.outBlock.begin(), v.outBlock.end(), 0.0f); }
+        for (auto& p : outPhase) std::fill (p.begin(), p.end(), 0.0f);
+        pos = 0; hopCount = 0; outIdx = 0;
+    }
+
+    void setDetune (float cents) noexcept { detuneCents = cents; }
+
+    /** Один семпл: out[0] = +1, out[1] = +2 (затримка ≈ N семплів). */
+    void process (float x, float* out) noexcept
+    {
+        inRing[(size_t) pos] = x;
+        pos = (pos + 1) & (N - 1);
+        for (int v = 0; v < kVoices; ++v) out[v] = voice[(size_t) v].outBlock[(size_t) outIdx];
+        if (++outIdx >= R) outIdx = 0;
+        if (++hopCount >= R) { hopCount = 0; analyse(); }
+    }
+
+private:
+    struct VoiceOut { std::vector<float> acc, outBlock; };
+
+    static float princ (float a) noexcept
+    {
+        return a - juce::MathConstants<float>::twoPi * std::floor ((a + juce::MathConstants<float>::pi) / juce::MathConstants<float>::twoPi);
+    }
+
+    void analyse() noexcept
+    {
+        // Аналіз
+        for (int i = 0; i < N; ++i) frame[(size_t) i] = inRing[(size_t) ((pos + i) & (N - 1))] * win[(size_t) i];
+        std::fill (frame.begin() + N, frame.end(), 0.0f);
+        fft->performRealOnlyForwardTransform (frame.data(), true);
+        float maxMag = 0.0f;
+        for (int k = 0; k <= H; ++k)
+        {
+            const float re = frame[(size_t) (2 * k)], im = frame[(size_t) (2 * k + 1)];
+            mag[(size_t) k] = std::sqrt (re * re + im * im);
+            phs[(size_t) k] = std::atan2 (im, re);
+            maxMag = std::max (maxMag, mag[(size_t) k]);
+        }
+
+        // Піки й області (межа — мінімум між сусідніми піками)
+        peaks.clear();
+        const float floor = maxMag * 1.0e-3f;
+        for (int k = 2; k < H - 2; ++k)
+        {
+            const float m = mag[(size_t) k];
+            if (m > floor && m > mag[(size_t) k - 1] && m >= mag[(size_t) k + 1] && m > mag[(size_t) k - 2] && m >= mag[(size_t) k + 2])
+                peaks.push_back (k);
+        }
+
+        // Миттєва частота піків (рад/семпл) з різниці фаз
+        const float twoPiOverN = juce::MathConstants<float>::twoPi / (float) N;
+        peakW.resize (peaks.size());
+        for (size_t p = 0; p < peaks.size(); ++p)
+        {
+            const int k = peaks[p];
+            const float expected = twoPiOverN * (float) k * (float) R;
+            const float dev = princ (phs[(size_t) k] - prevPhs[(size_t) k] - expected);
+            peakW[p] = twoPiOverN * (float) k + dev / (float) R;
+        }
+
+        // Межі областей: між сусідніми піками — по мінімуму спектра
+        regionLo.resize (peaks.size()); regionHi.resize (peaks.size());
+        for (size_t p = 0; p < peaks.size(); ++p)
+        {
+            regionLo[p] = p == 0 ? std::max (1, peaks[p] - 4) : regionHi[p - 1] + 1;
+            if (p + 1 < peaks.size())
+            {
+                int b = peaks[p];
+                for (int k = peaks[p]; k < peaks[p + 1]; ++k) if (mag[(size_t) k] < mag[(size_t) b]) b = k;
+                regionHi[p] = b;
+            }
+            else regionHi[p] = std::min (H - 1, peaks[p] + 4);
+        }
+
+        // Синтез для кожного голосу (для +1/+2 — дві розстроєні копії, якщо Detune > 0)
+        const float det = detuneCents;
+        for (int v = 0; v < kVoices; ++v)
+        {
+            auto& y = ybuf[(size_t) v];
+            std::fill (y.begin(), y.end(), 0.0f);
+            const int copies = det > 0.5f ? 2 : 1;
+            for (int c = 0; c < copies; ++c)
+            {
+                const double alpha = ratios[v] * (copies == 2 ? std::pow (2.0, (c == 0 ? -det : det) / 1200.0) : 1.0);
+                auto& oph = outPhase[(size_t) (v * 2 + c)];
+                const float gain = copies == 2 ? 0.70710678f : 1.0f;
+                for (size_t p = 0; p < peaks.size(); ++p)
+                {
+                    const int kp = peaks[p];
+                    const double wNew = alpha * peakW[p];
+                    const int kt = (int) std::lround (wNew / twoPiOverN);
+                    if (kt < 1 || kt >= H) continue;
+                    const int shift = kt - kp;
+                    const float phOut = princ (oph[(size_t) kt] + (float) (wNew * R));
+                    const float rot = phOut - phs[(size_t) kp];
+                    const float cr = std::cos (rot) * gain, ci = std::sin (rot) * gain;
+                    for (int k = regionLo[p]; k <= regionHi[p]; ++k)
+                    {
+                        const int kk = k + shift;
+                        if (kk < 1 || kk >= H) continue;
+                        const float re = frame[(size_t) (2 * k)], im = frame[(size_t) (2 * k + 1)];
+                        y[(size_t) (2 * kk)]     += re * cr - im * ci;
+                        y[(size_t) (2 * kk + 1)] += re * ci + im * cr;
+                    }
+                    // Фаза піку — на всі біни його області (плавність, коли пік переходить на сусідній бін)
+                    for (int k = regionLo[p]; k <= regionHi[p]; ++k)
+                        if (k + shift >= 1 && k + shift < H) oph[(size_t) (k + shift)] = phOut;
+                }
+            }
+
+            fft->performRealOnlyInverseTransform (y.data());
+            auto& vo = voice[(size_t) v];
+            for (int i = 0; i < N; ++i) vo.acc[(size_t) i] += y[(size_t) i] * win[(size_t) i];
+            for (int i = 0; i < R; ++i) vo.outBlock[(size_t) i] = vo.acc[(size_t) i];
+            std::move (vo.acc.begin() + R, vo.acc.end(), vo.acc.begin());
+            std::fill (vo.acc.end() - R, vo.acc.end(), 0.0f);
+        }
+        std::swap (prevPhs, phs);
+        outIdx = 0;
+    }
+
+    double fs = 48000.0;
+    int order = 10, N = 1024, R = 256, H = 512;
+    std::unique_ptr<juce::dsp::FFT> fft;
+    std::vector<float> win, inRing, frame, mag, phs, prevPhs;
+    std::vector<int> peaks, regionLo, regionHi;
+    std::vector<float> peakW;
+    std::array<VoiceOut, kVoices> voice;
+    std::array<std::vector<float>, kVoices * 2> outPhase;
+    std::array<std::vector<float>, kVoices> ybuf;
+    int pos = 0, hopCount = 0, outIdx = 0;
+    float detuneCents = 0.0f;
+public:
+    int extraOrder = 1;
+};
+
+//==============================================================================
 /** Октавер: три голоси (−1, −2, +1 октава) і три двигуни (Engine), без змішування між ними (змішування фаз = «муть»).
 
     Vintage — емуляція класичного аналогового октавера (схема типу OC-2) і «октавії»:
@@ -457,8 +629,9 @@ private:
 class Octaver
 {
 public:
-    enum Engine { poly = 0, vintage, mono };
-    struct Settings { float sub1Pct, sub2Pct, upPct, dryPct; int engine; float toneHz, bloomMs, wobblePct, wobbleHz; };
+    enum Engine { poly = 0, vintage, mono, spectral };
+    static constexpr int kEng = 4, kV = 4;                  // двигуни × голоси (−1, −2, +1, +2)
+    struct Settings { float sub1Pct, sub2Pct, upPct, up2Pct, dryPct; int engine; float toneHz, bloomMs, wobblePct, wobbleHz, detuneCents; };
 
     void prepare (double sampleRate)
     {
@@ -467,7 +640,7 @@ public:
         inHp.setHighPass (fs, 45.0, 0.707);
         xlp1.setLowPass (fs, 1500.0, 0.707); xlp2.setLowPass (fs, 1500.0, 0.707);
         upBp1.setHighPass (fs, 30.0, 0.707); upBp2.setLowPass (fs, 2500.0, 0.707);
-        upDc.setHighPass (fs, 40.0, 0.707);
+        upDc.setHighPass (fs, 40.0, 0.707); upDc2.setHighPass (fs, 60.0, 0.707);
         subLp1.setLowPass (fs, 160.0, 0.707); subLp2.setLowPass (fs, 160.0, 0.707);
         auto c = [this] (double ms) { return (float) std::exp (-1.0 / (0.001 * ms * fs)); };
         eA = c (1.0); eR = c (50.0); fA = c (2.0); fR = c (15.0); sA = c (30.0); sR = c (150.0);
@@ -484,6 +657,7 @@ public:
             b.g = (float) (1.0 - r);
             b.wSub = (float) juce::jlimit (1.0, 1.6, std::sqrt (120.0 / fc));
         }
+        spectralOct.prepare (fs);
         dsize = juce::nextPowerOfTwo ((int) (0.6 * fs));
         dbuf.assign ((size_t) dsize, 0.0f);
         norm.fill (1.0f);
@@ -495,13 +669,14 @@ public:
     void reset()
     {
         pitch.reset();
-        for (auto* f : { &inHp, &xlp1, &xlp2, &upBp1, &upBp2, &upLp2, &upDc, &toneLp, &an1, &an2, &subLp1, &subLp2 }) f->reset();
+        for (auto* f : { &inHp, &xlp1, &xlp2, &upBp1, &upBp2, &upLp2, &upDc, &upDc2, &toneLp, &an1, &an2, &subLp1, &subLp2 }) f->reset();
         upBp2.setLowPass (fs, 2500.0, 0.707); upLp2.setLowPass (fs, 2500.0, 0.707);
-        envX = envR = envA = envF = envS = 0.0f; bloomEnv = 1.0f;
+        envX = envR = envR2 = envA = envF = envS = 0.0f; bloomEnv = 1.0f;
         armed = false; ff1 = ff2 = false; s1 = s2 = 1.0f; want1 = want2 = 1.0f; wait1 = wait2 = 0;
         f0 = 0.0; anHz = 0.0; valid = 0; gate = 0.0f; since = 0; prevXm = 0.0f;
-        g1 = g2 = gu = 0.0f; gd = 1.0f; fresh = true;
-        w = { 0.0f, 0.0f, 0.0f }; lastEngine = -1;
+        g1 = g2 = gu = gu2 = 0.0f; gd = 1.0f; fresh = true;
+        w.fill (0.0f); lastEngine = -1;
+        spectralOct.reset();
         for (auto& b : bands) b.clear();
         std::fill (dbuf.begin(), dbuf.end(), 0.0f); dpos = 0;
         for (auto& v : ps) v.reset();
@@ -513,14 +688,15 @@ public:
     /** subClean (може бути nullptr): низ октав (< 160 Гц) окремо — щоб у режимі Pre суб не зрізав вхідний фільтр драйву. */
     void process (float* const* data, int numCh, int n, const Settings& s, float* subClean = nullptr)
     {
-        const int eng = juce::jlimit (0, 2, s.engine);
-        const float t1 = s.sub1Pct * 0.01f, t2 = s.sub2Pct * 0.01f, tu = s.upPct * 0.01f, td = s.dryPct * 0.01f;
+        const int eng = juce::jlimit (0, kEng - 1, s.engine);
+        const float t1 = s.sub1Pct * 0.01f, t2 = s.sub2Pct * 0.01f, tu = s.upPct * 0.01f, tu2 = s.up2Pct * 0.01f, td = s.dryPct * 0.01f;
+        spectralOct.setDetune (s.detuneCents);
         const float bloomCoef = s.bloomMs > 1.0f ? (float) std::exp (-1.0 / (0.001 * s.bloomMs * fs)) : 0.0f;
         toneLp.setLowPass (fs, juce::jlimit (150.0, 0.45 * fs, (double) s.toneHz), 0.707);
         const float wob = s.wobblePct * 0.01f;
         const double wobInc = s.wobbleHz / fs;
-        if (fresh) { g1 = t1; g2 = t2; gu = tu; gd = td; fresh = false; }
-        if (lastEngine < 0) { w = { 0.0f, 0.0f, 0.0f }; w[(size_t) eng] = 1.0f; }
+        if (fresh) { g1 = t1; g2 = t2; gu = tu; gu2 = tu2; gd = td; fresh = false; }
+        if (lastEngine < 0) { w.fill (0.0f); w[(size_t) eng] = 1.0f; }
         lastEngine = eng;
 
         for (int i = 0; i < n; ++i)
@@ -528,8 +704,8 @@ public:
             float x = data[0][i];
             if (numCh > 1) x = 0.5f * (x + data[1][i]);
 
-            g1 = t1 + sm * (g1 - t1); g2 = t2 + sm * (g2 - t2); gu = tu + sm * (gu - tu); gd = td + sm * (gd - td);
-            for (int e = 0; e < 3; ++e) { const float t = e == eng ? 1.0f : 0.0f; w[(size_t) e] = t + wSm * (w[(size_t) e] - t); }
+            g1 = t1 + sm * (g1 - t1); g2 = t2 + sm * (g2 - t2); gu = tu + sm * (gu - tu); gu2 = tu2 + sm * (gu2 - tu2); gd = td + sm * (gd - td);
+            for (int e = 0; e < kEng; ++e) { const float t = e == eng ? 1.0f : 0.0f; w[(size_t) e] = t + wSm * (w[(size_t) e] - t); }
 
             // --- Bloom
             const float ax = std::abs (x);
@@ -543,12 +719,13 @@ public:
             }
             else bloomEnv = 1.0f;
 
-            float v[9];
+            float v[kEng * kV];
             voices (x, v, w);
-            const float o1 = w[0] * v[0] * norm[0] + w[1] * v[3] * norm[3] + w[2] * v[6] * norm[6];
-            const float o2 = w[0] * v[1] * norm[1] + w[1] * v[4] * norm[4] + w[2] * v[7] * norm[7];
-            const float ou = w[0] * v[2] * norm[2] + w[1] * v[5] * norm[5] + w[2] * v[8] * norm[8];
-            float oct = toneLp.process (g1 * o1 + g2 * o2 + gu * ou);
+            float o[kV] {};
+            for (int e = 0; e < kEng; ++e)
+                if (w[(size_t) e] > 1.0e-5f)
+                    for (int k = 0; k < kV; ++k) o[k] += w[(size_t) e] * v[e * kV + k] * norm[(size_t) (e * kV + k)];
+            float oct = toneLp.process (g1 * o[0] + g2 * o[1] + gu * o[2] + gu2 * o[3]);
 
             if (wob > 0.001f)
             {
@@ -579,14 +756,14 @@ public:
     }
 
     float getTrackedHz() const noexcept { return gate > 0.5f ? (float) f0 : 0.0f; }
-    bool isIdle() const noexcept { return g1 < 1.0e-4f && g2 < 1.0e-4f && gu < 1.0e-4f && gd > 0.9999f; }
+    bool isIdle() const noexcept { return g1 < 1.0e-4f && g2 < 1.0e-4f && gu < 1.0e-4f && gu2 < 1.0e-4f && gd > 0.9999f; }
 
 private:
     //--------------------------------------------------------------------------
-    /** v[0..2] Poly (−1,−2,+1), v[3..5] Vintage, v[6..8] Mono HQ. Рахуються лише двигуни з вагою > 0. */
-    void voices (float x, float* v, const std::array<float, 3>& wt) noexcept
+    /** v[e·4 + k]: двигун e (Poly, Vintage, Mono HQ, Spectral), голос k (−1, −2, +1, +2). Рахуються лише двигуни з вагою > 0. */
+    void voices (float x, float* v, const std::array<float, kEng>& wt) noexcept
     {
-        for (int k = 0; k < 9; ++k) v[k] = 0.0f;
+        for (int k = 0; k < kEng * kV; ++k) v[k] = 0.0f;
 
         // --- Спільний трекер (YIN)
         if (pitch.push (x))
@@ -604,9 +781,14 @@ private:
         // Затримувальна лінія для Mono HQ
         dbuf[(size_t) dpos] = xh;
 
-        if (wt[1] > 1.0e-4f) runVintage (xh, xm, v + 3);
-        if (wt[2] > 1.0e-4f) runMono (v + 6);
-        if (wt[0] > 1.0e-4f) bank (x, v[0], v[1], v[2]);
+        if (wt[1] > 1.0e-4f) runVintage (xh, xm, v + 4);
+        if (wt[2] > 1.0e-4f) runMono (v + 8);
+        if (wt[0] > 1.0e-4f || wt[3] > 1.0e-4f) bank (x, v[0], v[1], v[2], v[3]);
+        if (wt[3] > 1.0e-4f)
+        {
+            v[12] = v[0]; v[13] = v[1];                     // −1/−2: поліфонічний банк (без затримки)
+            spectralOct.process (xh, v + 14);                // +1/+2: спектральний перенос піків
+        }
 
         dpos = (dpos + 1) & (dsize - 1);
         prevXm = xm;
@@ -647,6 +829,11 @@ private:
         const float ar = std::abs (rect);
         envR = ar > envR ? ar + eA * (envR - ar) : ar + eR * (envR - ar);
         out[2] = rect * envX / (envR + 1.0e-6f);
+        // +2: ще одне випрямлення вже подвоєної основної
+        const float rect2 = upDc2.process (std::abs (out[2]));
+        const float ar2 = std::abs (rect2);
+        envR2 = ar2 > envR2 ? ar2 + eA * (envR2 - ar2) : ar2 + eR * (envR2 - ar2);
+        out[3] = rect2 * envX / (envR2 + 1.0e-6f);
     }
 
     //--------------------------------------------------------------------------
@@ -696,6 +883,7 @@ private:
         out[0] = psProcess (ps[0]);
         out[1] = psProcess (ps[1]);
         out[2] = psProcess (ps[2]);
+        out[3] = psProcess (ps[3]);
     }
 
     void onPitch (float hz)
@@ -733,9 +921,9 @@ private:
         const float t = r * c - i * s; i = r * s + i * c; r = t;
     }
 
-    void bank (float x, float& sub1Out, float& sub2Out, float& upOut) noexcept
+    void bank (float x, float& sub1Out, float& sub2Out, float& upOut, float& up2Out) noexcept
     {
-        sub1Out = sub2Out = upOut = 0.0f;
+        sub1Out = sub2Out = upOut = up2Out = 0.0f;
         std::array<float, kBands> mag, ur, ui;
         for (int k = 0; k < kBands; ++k)
         {
@@ -787,16 +975,18 @@ private:
             const float m = mag[(size_t) k];
             sub1Out += m * b.wSub * b.h1r;
             sub2Out += m * b.wSub * b.h2r;
-            upOut   += m * (ur[(size_t) k] * ur[(size_t) k] - ui[(size_t) k] * ui[(size_t) k]);
+            const float c2 = ur[(size_t) k] * ur[(size_t) k] - ui[(size_t) k] * ui[(size_t) k], s2x = 2.0f * ur[(size_t) k] * ui[(size_t) k];
+            upOut   += m * c2;                                 // cos 2φ
+            up2Out  += m * (c2 * c2 - s2x * s2x);              // cos 4φ
         }
     }
 
     /** Нормування на гітароподібних тонах: кожен голос кожного двигуна на 100 % звучить так само голосно, як вхід. */
     void calibrate()
     {
-        std::array<double, 9> e {};
+        std::array<double, kEng * kV> e {};
         double inE = 0.0;
-        const std::array<float, 3> all { 1.0f, 1.0f, 1.0f };
+        std::array<float, kEng> all; all.fill (1.0f);
         for (double f : { 82.4, 110.0, 196.0 })
         {
             reset();
@@ -805,34 +995,35 @@ private:
             {
                 float x = 0.0f;
                 for (int h = 1; h <= 10; ++h) x += 0.3f / (float) h * (float) std::sin (juce::MathConstants<double>::twoPi * f * h * i / fs);
-                float v[9];
+                float v[kEng * kV];
                 voices (x, v, all);
                 if (i > n / 2)
                 {
                     inE += (double) x * x;
-                    for (int k = 0; k < 9; ++k) e[(size_t) k] += (double) v[k] * v[k];
+                    for (int k = 0; k < kEng * kV; ++k) e[(size_t) k] += (double) v[k] * v[k];
                 }
             }
         }
-        for (size_t k = 0; k < 9; ++k) norm[k] = e[k] > 0.0 ? (float) std::sqrt (inE / e[k]) : 1.0f;
+        for (size_t k = 0; k < e.size(); ++k) norm[k] = e[k] > 0.0 ? (float) std::sqrt (inE / e[k]) : 1.0f;
     }
 
     double fs = 48000.0;
     sn::PitchDetector pitch;
-    sn::Biquad inHp, xlp1, xlp2, upBp1, upBp2, upLp2, upDc, toneLp, an1, an2, subLp1, subLp2;
+    sn::Biquad inHp, xlp1, xlp2, upBp1, upBp2, upLp2, upDc, upDc2, toneLp, an1, an2, subLp1, subLp2;
+    SpectralOctaver spectralOct;
     std::array<Band, kBands> bands {};
-    std::array<float, 9> norm {};
-    std::array<float, 3> w {};
-    std::array<PsVoice, 3> ps { { { 0.5 }, { 0.25 }, { 2.0 } } };
+    std::array<float, kEng * kV> norm {};
+    std::array<float, kEng> w {};
+    std::array<PsVoice, 4> ps { { { 0.5 }, { 0.25 }, { 2.0 }, { 4.0 } } };
     std::vector<float> dbuf;
     int dsize = 1, dpos = 0, lastEngine = -1;
     float eA = 0, eR = 0, fA = 0, fR = 0, sA = 0, sR = 0, gA = 0, gR = 0, sm = 0, wSm = 0;
-    float envX = 0, envR = 0, envA = 0, envF = 0, envS = 0, bloomEnv = 1.0f, gate = 0.0f, prevXm = 0.0f;
+    float envX = 0, envR = 0, envR2 = 0, envA = 0, envF = 0, envS = 0, bloomEnv = 1.0f, gate = 0.0f, prevXm = 0.0f;
     bool armed = false, ff1 = false, ff2 = false, fresh = true;
     float s1 = 1.0f, s2 = 1.0f, want1 = 1.0f, want2 = 1.0f;
     int wait1 = 0, wait2 = 0, valid = 0, holdSamples = 1, since = 0;
     double f0 = 0.0, anHz = 0.0, wobPhase = 0.0;
-    float g1 = 0, g2 = 0, gu = 0, gd = 1.0f;
+    float g1 = 0, g2 = 0, gu = 0, gu2 = 0, gd = 1.0f;
     float svfIc1 = 0, svfIc2 = 0, svfG = 0.1f, svfK = 1.0f, svfComp = 1.0f;
 };
 } // namespace st

@@ -46,6 +46,10 @@ inline const std::vector<StompPreset>& getStompPresets()
         { "Bloom Sub Swell",             { { octOn, 1 }, { sub1, 110 }, { sub2, 50 }, { octEngine, 2 }, { bloom, 600 },
                                            { driveOn, 0 }, { echoOn, 1 }, { echoTime, 450 }, { feedback, 45 }, { echoMix, 25 } } },
         { "Clean Sub Bass (Mono HQ)",    { { octOn, 1 }, { octEngine, 2 }, { sub1, 100 }, { octDry, 100 }, { octTone, 1200 }, { driveOn, 0 } } },
+        { "Organ Chords (Spectral)",     { { octOn, 1 }, { octEngine, 3 }, { octDry, 100 }, { sub1, 70 }, { octUp, 80 }, { octUp2, 40 },
+                                           { detune, 8 }, { octTone, 4000 }, { bloom, 120 }, { driveOn, 0 } } },
+        { "12-String Shimmer",           { { octOn, 1 }, { octEngine, 3 }, { octDry, 100 }, { sub1, 0 }, { octUp, 90 }, { detune, 6 },
+                                           { octTone, 7000 }, { driveOn, 0 }, { echoOn, 1 }, { echoTime, 380 }, { feedback, 30 }, { echoMix, 20 } } },
         { "Slapback Crunch",             { { circuit, 1.0f }, { gain, 35 },
                                            { echoOn, 1 }, { echoTime, 110 }, { feedback, 10 }, { echoMix, 30 }, { wear, 20 } } },
     };

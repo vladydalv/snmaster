@@ -238,7 +238,7 @@ StompContent::StompContent (SpacenerdStompProcessor& p)
       presetBox (p),
       pad (p),
       drive   (p.apvts, "DRIVE", driveOn, 3),
-      octSec  (p.apvts, "OCTAVE", octOn, 7),
+      octSec  (p.apvts, "OCTAVE", octOn, 9),
       modSec  (p.apvts, "MODULATION", modOn, 8),
       echoSec (p.apvts, "TAPE ECHO", echoOn, 5),
       output (p)
@@ -252,15 +252,18 @@ StompContent::StompContent (SpacenerdStompProcessor& p)
     drive.knob (s, cleanBass, "Clean Bass");
     drive.knob (s, level, "Level", true);
 
-    octSec.add (std::make_unique<Segmented> (s, octEngine, "Engine"), 3, 44);
+    octSec.add (std::make_unique<Segmented> (s, octEngine, "Engine"), 4, 44);
     octSec.add (std::make_unique<Segmented> (s, octPos, "Position"), 2, 44);
-    trackView = static_cast<TrackView*> (&octSec.add (std::make_unique<TrackView> (p), 2, 44));
-    octSec.knob (s, sub1, "Sub -1");
-    octSec.knob (s, sub2, "Sub -2");
-    octSec.knob (s, octUp, "Up +1");
+    trackView = static_cast<TrackView*> (&octSec.add (std::make_unique<TrackView> (p), 3, 44));
+    // Порядок голосів — як на поліфонічних октаверах: сухий, −2, −1, +1, +2
     octSec.knob (s, octDry, "Dry");
+    octSec.knob (s, sub2, "Sub -2");
+    octSec.knob (s, sub1, "Sub -1");
+    octSec.knob (s, octUp, "Up +1");
+    octSec.knob (s, octUp2, "Up +2");
     octSec.knob (s, octTone, "Tone");
     octSec.knob (s, bloom, "Bloom");
+    octSec.knob (s, detune, "Detune");
     octSec.knob (s, wobble, "Wobble");
 
     // 8 колонок: режими ширші (назви не обрізаються), ручки — по 2 колонки

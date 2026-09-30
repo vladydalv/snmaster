@@ -291,15 +291,15 @@ int main (int argc, char* argv[])
             }
             return (float) (xy / std::sqrt (xx * yy + 1e-30));
         };
-        for (auto [eng, voice, ratio] : { std::tuple<int, int, double> { 1, 0, 0.5 }, { 2, 0, 0.5 }, { 2, 2, 2.0 }, { 1, 2, 2.0 } })
+        for (auto [eng, voice, ratio] : { std::tuple<int, int, double> { 1, 0, 0.5 }, { 2, 0, 0.5 }, { 2, 2, 2.0 }, { 1, 2, 2.0 }, { 3, 2, 2.0 }, { 3, 3, 4.0 } })
         {
             auto out = run (note, [eng = eng, voice = voice] (SpacenerdStompProcessor& p)
             {
                 set (p, octOn, 1); set (p, octDry, 0); set (p, octEngine, (float) eng); set (p, octTone, 8000);
-                set (p, sub1, voice == 0 ? 100.0f : 0.0f); set (p, octUp, voice == 2 ? 100.0f : 0.0f);
+                set (p, sub1, voice == 0 ? 100.0f : 0.0f); set (p, octUp, voice == 2 ? 100.0f : 0.0f); set (p, octUp2, voice == 3 ? 100.0f : 0.0f);
             });
             const float c = nacf (out, fs / (110.0 * ratio));
-            check (c > 0.9f, String (eng == 1 ? "vintage " : "mono HQ ") + (voice == 0 ? "-1" : "+1") + " clarity " + String (c, 3));
+            check (c > 0.9f, String (eng == 1 ? "vintage " : eng == 2 ? "mono HQ " : "spectral ") + (voice == 0 ? "-1" : voice == 2 ? "+1" : "+2") + " clarity " + String (c, 3));
         }
 
         // Poly тримає акорд: A2 + E3 → суб обох нот

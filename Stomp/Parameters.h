@@ -18,6 +18,8 @@ namespace StompIDs
     inline constexpr auto sub1      = "sub1";       // −1 октава
     inline constexpr auto sub2      = "sub2";       // −2 октави
     inline constexpr auto octUp     = "octUp";      // +1 октава
+    inline constexpr auto octUp2    = "octUp2";     // +2 октави
+    inline constexpr auto detune    = "detune";     // розстроювання +1/+2 (Spectral)
     inline constexpr auto octDry    = "octDry";
     inline constexpr auto octEngine = "octEngine";  // Poly / Vintage / Mono HQ
     inline constexpr auto octTone   = "octTone";
@@ -84,8 +86,11 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createStompLayout()
     l.add (std::make_unique<F> (id (sub1),   "Sub -1",   lin (0.0f, 200.0f), 100.0f, pct));
     l.add (std::make_unique<F> (id (sub2),   "Sub -2",   lin (0.0f, 200.0f), 0.0f, pct));
     l.add (std::make_unique<F> (id (octUp),  "Up +1",    lin (0.0f, 200.0f), 0.0f, pct));
+    l.add (std::make_unique<F> (id (octUp2), "Up +2",    lin (0.0f, 200.0f), 0.0f, pct));
+    l.add (std::make_unique<F> (id (detune), "Detune",   lin (0.0f, 25.0f), 0.0f,
+                                A().withStringFromValueFunction ([] (float v, int) { return String (v, 1) + " ct"; }).withLabel ("ct")));
     l.add (std::make_unique<F> (id (octDry), "Octave Dry", lin (0.0f, 100.0f), 100.0f, pct));
-    l.add (std::make_unique<C> (id (octEngine), "Octave Engine", StringArray { "Poly", "Vintage", "Mono HQ" }, 1));
+    l.add (std::make_unique<C> (id (octEngine), "Octave Engine", StringArray { "Poly", "Vintage", "Mono HQ", "Spectral" }, 1));
     l.add (std::make_unique<F> (id (octTone), "Octave Tone", skew (150.0f, 8000.0f, 1500.0f), 2500.0f, hz));
     l.add (std::make_unique<F> (id (bloom),  "Bloom",    skew (0.0f, 2000.0f, 300.0f), 0.0f, ms));
     l.add (std::make_unique<F> (id (wobble), "Wobble",   lin (0.0f, 100.0f), 0.0f, pct));

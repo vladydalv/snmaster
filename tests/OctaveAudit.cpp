@@ -124,15 +124,15 @@ int main()
 
         if (nt.f.size() == 1)
             std::cout << "  (metric check: dry clarity " << String (nacf (in, fs / nt.f[0], 0.15, 0.9), 3) << ")" << std::endl;
-        for (int engine : { 0, 1, 2 })
-            for (int voice : { 0, 1, 2 })
+        for (int engine : { 0, 1, 2, 3 })
+            for (int voice : { 0, 1, 2, 3 })
             {
                 auto out = run (in, [&] (SpacenerdStompProcessor& p)
                 {
                     set (p, octOn, 1); set (p, octDry, 0); set (p, octEngine, (float) engine); set (p, octTone, 8000);
-                    set (p, sub1, voice == 0 ? 100.0f : 0.0f); set (p, sub2, voice == 1 ? 100.0f : 0.0f); set (p, octUp, voice == 2 ? 100.0f : 0.0f);
+                    set (p, sub1, voice == 0 ? 100.0f : 0.0f); set (p, sub2, voice == 1 ? 100.0f : 0.0f); set (p, octUp, voice == 2 ? 100.0f : 0.0f); set (p, octUp2, voice == 3 ? 100.0f : 0.0f);
                 });
-                const double ratio = voice == 0 ? 0.5 : voice == 1 ? 0.25 : 2.0;
+                const double ratio = voice == 0 ? 0.5 : voice == 1 ? 0.25 : voice == 2 ? 2.0 : 4.0;
                 // Нові (октавні) складові: для −1 — непарні кратні f0/2; −2 — непарні кратні f0/4; +1 — 2·f0 (у сухому вона теж є)
                 float newE = 0.0f;
                 String comps;
@@ -140,7 +140,7 @@ int main()
                     for (int k = 1; k <= 5; k += 2)
                     {
                         const double fq = f * ratio * k;
-                        if (voice == 2 && k > 1) break;
+                        if (voice >= 2 && k > 1) break;
                         const float a = band (out, fq, 0.1, 1.0);
                         newE += a * a;
                         if (nt.f.size() == 1) comps << String (fq, 0) << "Hz " << String (sn::gainToDb (a), 0) << "  ";
@@ -150,7 +150,7 @@ int main()
                 String clar;
                 if (nt.f.size() == 1)
                     clar = "  clarity " + String (nacf (out, fs / (nt.f[0] * ratio), 0.15, 0.9), 3);
-                std::cout << "  " << (engine == 0 ? "Poly   " : engine == 1 ? "Vintage" : "MonoHQ ") << " " << (voice == 0 ? "-1" : voice == 1 ? "-2" : "+1")
+                std::cout << "  " << (engine == 0 ? "Poly    " : engine == 1 ? "Vintage " : engine == 2 ? "MonoHQ  " : "Spectral") << " " << (voice == 0 ? "-1" : voice == 1 ? "-2" : voice == 2 ? "+1" : "+2")
                           << ": out " << String (outR - inR, 1) << " dB re input, octave comps " << String (sn::gainToDb (std::sqrt (newE)) - inR, 1)
                           << " dB" << clar << " trk " << String (lastTracked, 1) << "  | " << comps << std::endl;
             }
