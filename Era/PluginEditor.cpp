@@ -10,15 +10,19 @@ EraPad::EraPad (SpacenerdEraProcessor& p)
       yearAtt (*p.apvts.getParameter (year),      [this] (float v) { yearVal = v; repaint(); }, nullptr),
       intAtt  (*p.apvts.getParameter (intensity), [this] (float v) { intVal = v;  repaint(); }, nullptr),
       lowAtt  (*p.apvts.getParameter (yearLow),   [this] (float v) { lowVal = v;  repaint(); }, nullptr),
-      highAtt (*p.apvts.getParameter (yearHigh),  [this] (float v) { highVal = v; repaint(); }, nullptr)
+      highAtt (*p.apvts.getParameter (yearHigh),  [this] (float v) { highVal = v; repaint(); }, nullptr),
+      lowAmtAtt  (*p.apvts.getParameter (lowAmt),  [this] (float v) { lowAmtVal = v;  repaint(); }, nullptr),
+      highAmtAtt (*p.apvts.getParameter (highAmt), [this] (float v) { highAmtVal = v; repaint(); }, nullptr)
 {
+    lowAmtAtt.sendInitialUpdate();
+    highAmtAtt.sendInitialUpdate();
     yearAtt.sendInitialUpdate();
     intAtt.sendInitialUpdate();
     lowAtt.sendInitialUpdate();
     highAtt.sendInitialUpdate();
     for (auto& f : flicker) f = rng.nextFloat();
     setMouseCursor (MouseCursor::CrosshairCursor);
-    setTooltip ("Drag: left-right = year, up-down = intensity. SPLIT: drag the LOW (bass) and HIGH (top end) handles. Double-click: reset.");
+    setTooltip ("Drag: left-right = year, up-down = intensity. SPLIT: drag LOW (bass) and HIGH (top end) handles: left-right = decade, up-down = how strong. Double-click: reset.");
 }
 
 Colour EraPad::eraColour (float y)
@@ -120,9 +124,9 @@ void EraPad::paint (Graphics& g)
             const auto c = eraColour (yr);
             const auto h = handleRect (low);
             const float x = h.getCentreX();
-            // Пунктир через свою третину дисплея
-            const float y0 = low ? gr.getBottom() - gr.getHeight() / 3.0f : gr.getY();
-            const float y1 = low ? gr.getBottom() : gr.getY() + gr.getHeight() / 3.0f;
+            // Пунктир від ручки до осі: висота = сила смуги
+            const float y0 = h.getCentreY();
+            const float y1 = gr.getBottom();
             Path line; line.startNewSubPath (x, y0); line.lineTo (x, y1);
             Path dashed; const float d[] { 4.0f, 3.0f };
             PathStrokeType (1.5f).createDashedStroke (dashed, line, d, 2);
@@ -134,7 +138,7 @@ void EraPad::paint (Graphics& g)
             g.setColour (c);
             g.drawRoundedRectangle (h, 9.0f, active ? 2.2f : 1.4f);
             g.setFont (FontOptions (10.0f, Font::bold));
-            g.drawText ((low ? "LOW " : "HIGH ") + String (roundToInt (yr)), h, Justification::centred);
+            g.drawText ((low ? "LOW " : "HIGH ") + String (roundToInt (yr)) + " · " + String (roundToInt (low ? lowAmtVal : highAmtVal)) + "%", h, Justification::centred);
         };
         handle (true);
         handle (false);
@@ -176,17 +180,17 @@ Rectangle<float> EraPad::handleRect (bool low) const
     const auto gr = grid();
     const float cw = gr.getWidth() / (float) cols;
     const float x = gr.getX() + ((low ? lowVal : highVal) - 1960.0f + 0.5f) * cw;
-    const float y = low ? gr.getBottom() - 24.0f : gr.getY() + 6.0f;
-    return { x - 38.0f, y, 76.0f, 18.0f };
+    const float y = gr.getBottom() - (low ? lowAmtVal : highAmtVal) * 0.01f * gr.getHeight();
+    return { x - 52.0f, y - 9.0f, 104.0f, 18.0f };
 }
 
 void EraPad::setFromPoint (Point<float> p)
 {
     const auto gr = grid();
     const float y = jlimit (1960.0f, 2025.0f, 1960.0f + (p.x - gr.getX()) / gr.getWidth() * (float) cols - 0.5f);
-    if (drag == Drag::low)  { lowAtt.setValueAsPartOfGesture (y);  return; }
-    if (drag == Drag::high) { highAtt.setValueAsPartOfGesture (y); return; }
     const float i = jlimit (0.0f, 100.0f, (gr.getBottom() - p.y) / gr.getHeight() * 100.0f);
+    if (drag == Drag::low)  { lowAtt.setValueAsPartOfGesture (y);  lowAmtAtt.setValueAsPartOfGesture (i);  return; }
+    if (drag == Drag::high) { highAtt.setValueAsPartOfGesture (y); highAmtAtt.setValueAsPartOfGesture (i); return; }
     yearAtt.setValueAsPartOfGesture (y);
     intAtt.setValueAsPartOfGesture (i);
 }
@@ -200,8 +204,8 @@ void EraPad::mouseDown (const MouseEvent& e)
         if (handleRect (true).expanded (6.0f).contains (e.position))       drag = Drag::low;
         else if (handleRect (false).expanded (6.0f).contains (e.position)) drag = Drag::high;
     }
-    if (drag == Drag::low)       lowAtt.beginGesture();
-    else if (drag == Drag::high) highAtt.beginGesture();
+    if (drag == Drag::low)       { lowAtt.beginGesture();  lowAmtAtt.beginGesture(); }
+    else if (drag == Drag::high) { highAtt.beginGesture(); highAmtAtt.beginGesture(); }
     else                         { yearAtt.beginGesture(); intAtt.beginGesture(); }
     setFromPoint (e.position);
 }
@@ -210,8 +214,8 @@ void EraPad::mouseDrag (const MouseEvent& e) { if (drag != Drag::none) setFromPo
 
 void EraPad::mouseUp (const MouseEvent&)
 {
-    if (drag == Drag::low)        lowAtt.endGesture();
-    else if (drag == Drag::high)  highAtt.endGesture();
+    if (drag == Drag::low)        { lowAtt.endGesture();  lowAmtAtt.endGesture(); }
+    else if (drag == Drag::high)  { highAtt.endGesture(); highAmtAtt.endGesture(); }
     else if (drag == Drag::main)  { yearAtt.endGesture(); intAtt.endGesture(); }
     drag = Drag::none;
     repaint();
@@ -219,8 +223,10 @@ void EraPad::mouseUp (const MouseEvent&)
 
 void EraPad::mouseDoubleClick (const MouseEvent& e)
 {
-    if (splitOn() && handleRect (true).expanded (6.0f).contains (e.position))  { lowAtt.setValueAsCompleteGesture (1972.0f); return; }
-    if (splitOn() && handleRect (false).expanded (6.0f).contains (e.position)) { highAtt.setValueAsCompleteGesture (2015.0f); return; }
+    if (splitOn() && handleRect (true).expanded (6.0f).contains (e.position))
+    { lowAtt.setValueAsCompleteGesture (1972.0f);  lowAmtAtt.setValueAsCompleteGesture (70.0f);  return; }
+    if (splitOn() && handleRect (false).expanded (6.0f).contains (e.position))
+    { highAtt.setValueAsCompleteGesture (2015.0f); highAmtAtt.setValueAsCompleteGesture (70.0f); return; }
     yearAtt.setValueAsCompleteGesture (1975.0f);
     intAtt.setValueAsCompleteGesture (60.0f);
 }

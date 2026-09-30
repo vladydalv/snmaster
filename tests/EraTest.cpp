@@ -180,12 +180,58 @@ int main (int argc, char* argv[])
     }
 
     }
-    // 6b. Split: низ з 1965, верх з 2020 — звучить інакше, ніж без Split
+    // 6b. Split: ручка LOW реально змінює низ, HIGH — верх (відносно 1 кГц, щоб авто-гучність не маскувала)
     {
-        auto a = process (music, [] (SpacenerdEraProcessor& q) { set (q, year, 1990.0f); set (q, intensity, 90.0f); });
-        auto b = process (music, [] (SpacenerdEraProcessor& q) { set (q, year, 1990.0f); set (q, intensity, 90.0f);
-                                                                 set (q, split, 1.0f); set (q, yearLow, 1965.0f); set (q, yearHigh, 2020.0f); });
-        check (diffDb (b, a) > -30.0f, "Split bands change sound: " + String (diffDb (b, a), 1) + " dB");
+        auto bandRel = [] (const AudioBuffer<float>& b, double f)
+        {
+            auto e = [&] (double fc)
+            {
+                sn::Biquad bp; bp.setBandPass (fs, fc, 1.4);
+                double s = 0.0;
+                for (int i = 0; i < b.getNumSamples(); ++i) { const float y = bp.process (b.getSample (0, i)); if (i > 96000) s += (double) y * y; }
+                return 10.0 * std::log10 (s + 1e-30);
+            };
+            return (float) (e (f) - e (1000.0));
+        };
+        // Широкосмуговий сигнал (рожевий шум): у тестовому міксі майже немає енергії нижче 55 Гц
+        AudioBuffer<float> pink (2, (int) (fs * 6.0));
+        {
+            std::mt19937 rng (5);
+            std::normal_distribution<float> nd (0.0f, 1.0f);
+            float b0 = 0, b1 = 0, b2 = 0;
+            for (int i = 0; i < pink.getNumSamples(); ++i)
+            {
+                const float w = nd (rng);
+                b0 = 0.99765f * b0 + w * 0.0990460f; b1 = 0.96300f * b1 + w * 0.2965164f; b2 = 0.57000f * b2 + w * 1.0526913f;
+                const float v = 0.03f * (b0 + b1 + b2 + w * 0.1848f);
+                pink.setSample (0, i, v); pink.setSample (1, i, v);
+            }
+        }
+        auto run = [&] (float lowY, float highY, float amt)
+        {
+            return process (pink, [=] (SpacenerdEraProcessor& q)
+            {
+                set (q, year, 1990.0f); set (q, intensity, 60.0f); set (q, split, 1.0f);
+                set (q, yearLow, lowY); set (q, yearHigh, highY); set (q, lowAmt, amt); set (q, highAmt, amt);
+            });
+        };
+        auto a = run (1960.0f, 1990.0f, 100.0f), b = run (2005.0f, 1990.0f, 100.0f);
+        const float dLow = std::max (std::abs (bandRel (a, 45.0) - bandRel (b, 45.0)), std::abs (bandRel (a, 80.0) - bandRel (b, 80.0)));
+        auto c = run (1990.0f, 1960.0f, 100.0f), d = run (1990.0f, 2005.0f, 100.0f);
+        const float dHigh = std::abs (bandRel (c, 10000.0) - bandRel (d, 10000.0));
+        auto e0 = run (1960.0f, 1960.0f, 0.0f), e1 = run (1960.0f, 1960.0f, 100.0f);
+        const float dAmt = std::abs (bandRel (e0, 10000.0) - bandRel (e1, 10000.0));
+        check (dLow > 4.0f, "Split LOW 1960 vs 2005 changes bass: " + String (dLow, 1) + " dB");
+        check (dHigh > 5.0f, "Split HIGH 1960 vs 2005 changes top: " + String (dHigh, 1) + " dB");
+        check (dAmt > 4.0f, "Split band intensity (vertical) changes sound: " + String (dAmt, 1) + " dB");
+    }
+
+    // 6b2. Пресет скидає Split
+    {
+        SpacenerdEraProcessor q;
+        set (q, split, 1.0f); set (q, yearLow, 2020.0f);
+        q.setCurrentProgram (1);
+        check (q.apvts.getRawParameterValue (split)->load() < 0.5f, "Preset resets Split");
     }
 
     // 6c. Reference Match: «платівка» зі спектром і гучністю стоунера 1972 → рік поруч з 1972
@@ -234,7 +280,7 @@ int main (int argc, char* argv[])
     if (argc > 1)
     {
         SpacenerdEraProcessor p; p.setCurrentProgram (1);
-        process (music, [] (SpacenerdEraProcessor& q) { set (q, split, 1.0f); set (q, yearLow, 1970.0f); set (q, yearHigh, 2012.0f); }, &p);
+        process (music, [] (SpacenerdEraProcessor& q) { set (q, split, 1.0f); set (q, yearLow, 1970.0f); set (q, yearHigh, 2012.0f); set (q, lowAmt, 35.0f); set (q, highAmt, 85.0f); }, &p);
         std::unique_ptr<AudioProcessorEditor> ed (p.createEditor());
         for (int f = 0; f < 8; ++f)
         {

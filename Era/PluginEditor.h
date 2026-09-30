@@ -25,8 +25,8 @@ private:
     static juce::Colour eraColour (float year);
 
     SpacenerdEraProcessor& proc;
-    juce::ParameterAttachment yearAtt, intAtt, lowAtt, highAtt;
-    float yearVal = 1975.0f, intVal = 60.0f, lowVal = 1972.0f, highVal = 2015.0f;
+    juce::ParameterAttachment yearAtt, intAtt, lowAtt, highAtt, lowAmtAtt, highAmtAtt;
+    float yearVal = 1975.0f, intVal = 60.0f, lowVal = 1972.0f, highVal = 2015.0f, lowAmtVal = 70.0f, highAmtVal = 70.0f;
     enum class Drag { none, main, low, high };
     Drag drag = Drag::none;
     bool splitOn() const;

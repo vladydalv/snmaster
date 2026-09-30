@@ -366,6 +366,23 @@ PresetBox::PresetBox (AudioProcessor& p) : proc (p)
     sync();
 }
 
+void PresetBox::showPopup()
+{
+    PopupMenu menu;
+    const int current = proc.getCurrentProgram();
+    for (int i = 0; i < proc.getNumPrograms(); ++i)
+        menu.addItem (i + 1, proc.getProgramName (i), true, i == current);
+
+    Component::SafePointer<PresetBox> safe (this);
+    menu.showMenuAsync (PopupMenu::Options().withTargetComponent (this).withMinimumWidth (getWidth()),
+                        [safe] (int result)
+                        {
+                            if (safe == nullptr || result <= 0) return;
+                            safe->proc.setCurrentProgram (result - 1);
+                            safe->sync();
+                        });
+}
+
 void PresetBox::sync()
 {
     const int id = proc.getCurrentProgram() + 1;

@@ -13,6 +13,8 @@ namespace EraIDs
     inline constexpr auto split     = "split";      // окремі епохи для низу і верху
     inline constexpr auto yearLow   = "yearLow";
     inline constexpr auto yearHigh  = "yearHigh";
+    inline constexpr auto lowAmt    = "lowAmt";     // інтенсивність низу (вертикаль ручки LOW)
+    inline constexpr auto highAmt   = "highAmt";    // інтенсивність верху (вертикаль ручки HIGH)
 }
 
 inline juce::AudioProcessorValueTreeState::ParameterLayout createEraLayout()
@@ -40,5 +42,8 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createEraLayout()
     l.add (std::make_unique<AudioParameterBool> (id (split), "Split Bands", false));
     l.add (std::make_unique<F> (id (yearLow),  "Low Year",  NormalisableRange<float> (1960.0f, 2025.0f), 1972.0f, yearText));
     l.add (std::make_unique<F> (id (yearHigh), "High Year", NormalisableRange<float> (1960.0f, 2025.0f), 2015.0f, yearText));
+    const auto bandPct = A().withStringFromValueFunction ([] (float v, int) { return String (roundToInt (v)) + " %"; }).withLabel ("%");
+    l.add (std::make_unique<F> (id (lowAmt),  "Low Intensity",  NormalisableRange<float> (0.0f, 100.0f), 70.0f, bandPct));
+    l.add (std::make_unique<F> (id (highAmt), "High Intensity", NormalisableRange<float> (0.0f, 100.0f), 70.0f, bandPct));
     return l;
 }

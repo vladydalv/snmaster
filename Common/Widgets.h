@@ -128,6 +128,8 @@ class PresetBox final : public juce::ComboBox
 public:
     explicit PresetBox (juce::AudioProcessor&);
     void sync();
+    /** Власне меню: пресет застосовується завжди, навіть якщо вибрати той самий повторно. */
+    void showPopup() override;
 
 private:
     juce::AudioProcessor& proc;
