@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(SpacenerdMaster VERSION 0.1.0)
+project(Spacenerd VERSION 0.2.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,52 +23,65 @@ else()
     set(SN_FORMATS VST3)
 endif()
 
-juce_add_plugin(SpacenerdMaster
-    COMPANY_NAME             "Spacenerd"
-    BUNDLE_ID                "space.spacenerd.master"
-    PLUGIN_NAME              "Spacenerd Master"
-    PRODUCT_NAME             "Spacenerd Master"
-    DESCRIPTION              "Mastering chain: EQ, compressor, saturation, width, limiter"
-    PLUGIN_MANUFACTURER_CODE Spcn
-    PLUGIN_CODE              Mstr
-    IS_SYNTH                 FALSE
-    NEEDS_MIDI_INPUT         FALSE
-    NEEDS_MIDI_OUTPUT        FALSE
-    IS_MIDI_EFFECT           FALSE
-    AU_MAIN_TYPE             kAudioUnitType_Effect
-    VST3_CATEGORIES          Fx Mastering Dynamics
-    COPY_PLUGIN_AFTER_BUILD  FALSE
-    FORMATS                  ${SN_FORMATS})
+set(SN_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/Common/Widgets.cpp)
 
-set(SN_SOURCES
-    Source/PluginProcessor.cpp
-    Source/PluginEditor.cpp)
+# sn_add_plugin(<target> <folder> <name> <plugin code> <description> <vst3 categories>)
+function(sn_add_plugin target folder name code description categories)
+    juce_add_plugin(${target}
+        COMPANY_NAME             "Spacenerd"
+        BUNDLE_ID                "space.spacenerd.${folder}"
+        PLUGIN_NAME              "${name}"
+        PRODUCT_NAME             "${name}"
+        DESCRIPTION              "${description}"
+        PLUGIN_MANUFACTURER_CODE Spcn
+        PLUGIN_CODE              ${code}
+        IS_SYNTH                 FALSE
+        NEEDS_MIDI_INPUT         FALSE
+        NEEDS_MIDI_OUTPUT        FALSE
+        IS_MIDI_EFFECT           FALSE
+        AU_MAIN_TYPE             kAudioUnitType_Effect
+        VST3_CATEGORIES          ${categories}
+        COPY_PLUGIN_AFTER_BUILD  FALSE
+        FORMATS                  ${SN_FORMATS})
 
-target_sources(SpacenerdMaster PRIVATE ${SN_SOURCES})
+    file(GLOB plugin_sources ${CMAKE_CURRENT_SOURCE_DIR}/${folder}/*.cpp)
+    target_sources(${target} PRIVATE ${plugin_sources} ${SN_COMMON_SOURCES})
+    target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Common)
 
-target_compile_definitions(SpacenerdMaster PUBLIC
-    JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0
-    JUCE_VST3_CAN_REPLACE_VST2=0
-    JUCE_DISPLAY_SPLASH_SCREEN=0)
+    target_compile_definitions(${target} PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0)
 
-target_link_libraries(SpacenerdMaster
-    PRIVATE
-        juce::juce_audio_utils
-        juce::juce_dsp
-    PUBLIC
-        juce::juce_recommended_config_flags
-        juce::juce_recommended_lto_flags
-        juce::juce_recommended_warning_flags)
+    target_link_libraries(${target}
+        PRIVATE
+            juce::juce_audio_utils
+            juce::juce_dsp
+        PUBLIC
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_lto_flags
+            juce::juce_recommended_warning_flags)
+endfunction()
 
-# Офлайн-тест DSP (не потрапляє в плагін)
-option(SN_BUILD_TESTS "Build offline DSP test" OFF)
+sn_add_plugin(SpacenerdMaster Master "Spacenerd Master" Mstr
+    "Mastering chain: EQ, compressor, saturation, width, true-peak limiter" "Fx Mastering Dynamics")
+
+sn_add_plugin(SpacenerdTone Tone "Spacenerd Tone" Tone
+    "Channel colour: transient shaper, tube, tape, exciter, de-esser" "Fx Distortion Dynamics")
+
+# Офлайн-тести DSP (не потрапляють у плагіни)
+option(SN_BUILD_TESTS "Build offline DSP tests" OFF)
 if(SN_BUILD_TESTS)
-    juce_add_console_app(SpacenerdMasterTest PRODUCT_NAME "SpacenerdMasterTest")
-    target_sources(SpacenerdMasterTest PRIVATE ${SN_SOURCES} tests/OfflineTest.cpp)
-    target_compile_definitions(SpacenerdMasterTest PRIVATE
-        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 SN_OFFLINE_TEST=1)
-    target_link_libraries(SpacenerdMasterTest PRIVATE
-        juce::juce_audio_utils juce::juce_dsp
-        juce::juce_recommended_config_flags)
+    function(sn_add_test target folder testfile)
+        juce_add_console_app(${target} PRODUCT_NAME "${target}")
+        file(GLOB plugin_sources ${CMAKE_CURRENT_SOURCE_DIR}/${folder}/*.cpp)
+        target_sources(${target} PRIVATE ${plugin_sources} ${SN_COMMON_SOURCES} tests/${testfile})
+        target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Common)
+        target_compile_definitions(${target} PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+        target_link_libraries(${target} PRIVATE juce::juce_audio_utils juce::juce_dsp
+                                                juce::juce_recommended_config_flags)
+    endfunction()
+    sn_add_test(MasterTest Master MasterTest.cpp)
+    sn_add_test(ToneTest   Tone   ToneTest.cpp)
 endif()

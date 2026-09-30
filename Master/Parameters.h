@@ -29,11 +29,13 @@ namespace ParamIDs
     inline constexpr auto scHpf     = "scHpf";
     inline constexpr auto makeup    = "makeup";
     inline constexpr auto compMix   = "compMix";
+    inline constexpr auto compAuto  = "compAuto";
 
     // Сатурація
     inline constexpr auto satOn     = "satOn";
     inline constexpr auto drive     = "drive";
     inline constexpr auto satMix    = "satMix";
+    inline constexpr auto satType   = "satType";
 
     // Стерео
     inline constexpr auto widthOn   = "widthOn";
@@ -45,6 +47,9 @@ namespace ParamIDs
     inline constexpr auto limGain   = "limGain";
     inline constexpr auto ceiling   = "ceiling";
     inline constexpr auto limRel    = "limRel";
+
+    // Порівняння на однаковій гучності
+    inline constexpr auto gainMatch = "gainMatch";
 }
 
 namespace ParamText
@@ -118,10 +123,12 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     layout.add (std::make_unique<F> (id (ParamIDs::scHpf),     "SC Filter", range (20.0f, 300.0f, 90.0f), 90.0f, Hz));
     layout.add (std::make_unique<F> (id (ParamIDs::makeup),    "Makeup",    lin (0.0f, 18.0f), 0.0f, dB));
     layout.add (std::make_unique<F> (id (ParamIDs::compMix),   "Comp Mix",  lin (0.0f, 100.0f), 100.0f, pct));
+    layout.add (std::make_unique<B> (id (ParamIDs::compAuto),  "Auto Release", false));
 
     layout.add (std::make_unique<B> (id (ParamIDs::satOn), "Sat On", false));
     layout.add (std::make_unique<F> (id (ParamIDs::drive),  "Drive",   lin (0.0f, 100.0f), 25.0f, pct));
     layout.add (std::make_unique<F> (id (ParamIDs::satMix), "Sat Mix", lin (0.0f, 100.0f), 100.0f, pct));
+    layout.add (std::make_unique<AudioParameterChoice> (id (ParamIDs::satType), "Sat Type", StringArray { "Tube", "Tape", "Soft" }, 0));
 
     layout.add (std::make_unique<B> (id (ParamIDs::widthOn), "Width On", true));
     layout.add (std::make_unique<F> (id (ParamIDs::width),    "Width",     lin (0.0f, 200.0f), 100.0f, pct));
@@ -131,6 +138,8 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     layout.add (std::make_unique<F> (id (ParamIDs::limGain), "Gain",    lin (0.0f, 18.0f), 0.0f, dB));
     layout.add (std::make_unique<F> (id (ParamIDs::ceiling), "Ceiling", lin (-3.0f, 0.0f), -1.0f, dB));
     layout.add (std::make_unique<F> (id (ParamIDs::limRel),  "Lim Release", range (1.0f, 500.0f, 60.0f), 60.0f, ms));
+
+    layout.add (std::make_unique<B> (id (ParamIDs::gainMatch), "Gain Match", false));
 
     return layout;
 }

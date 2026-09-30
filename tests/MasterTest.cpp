@@ -1,10 +1,11 @@
 // Офлайн-тест DSP: гучність, лімітер, затримка, стабільність. Опційно — знімок інтерфейсу.
-#include "../Source/PluginProcessor.h"
-#include "../Source/PluginEditor.h"
+#include "../Master/PluginProcessor.h"
+#include "../Master/PluginEditor.h"
 #include <juce_events/juce_events.h>
 #include <iostream>
 #include <chrono>
 #include <random>
+#include <complex>
 
 using namespace juce;
 
@@ -241,6 +242,89 @@ int main (int argc, char* argv[])
         }
     }
 
+
+    // 10. EQ без cramping: high shelf +6 dB @ 14 кГц, порівняння з аналоговим прототипом RBJ @ 18 кГц (fs 44.1)
+    {
+        SpacenerdMasterProcessor p; allOff (p);
+        setParam (p, ParamIDs::eqOn, 1.0f);
+        setParam (p, ParamIDs::hpfFreq, 10.0f);
+        setParam (p, ParamIDs::highFreq, 14000.0f);
+        setParam (p, ParamIDs::highGain, 6.0f);
+        const double f = 18000.0, fs = 44100.0;
+        auto out = run (p, fs, 1, [&] (AudioBuffer<float>& b, int64 start)
+        {
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                const float v = 0.25f * (float) std::sin (2.0 * MathConstants<double>::pi * f * (double) (start + i) / fs);
+                b.setSample (0, i, v); b.setSample (1, i, v);
+            }
+        });
+        const float measured = sn::gainToDb (out.getMagnitude (0, 22050, 22050) / 0.25f);
+        // Аналоговий high shelf (RBJ): H(s) = A * (A s^2 + sqrt(A)/Q s + 1) / (s^2 + sqrt(A)/Q s + A)
+        const double A = std::pow (10.0, 6.0 / 40.0), Q = 0.707, w = f / 14000.0;
+        const std::complex<double> sj (0.0, w);
+        const auto H = A * (A * sj * sj + std::sqrt (A) / Q * sj + 1.0) / (sj * sj + std::sqrt (A) / Q * sj + A);
+        const float analog = (float) (20.0 * std::log10 (std::abs (H)));
+        check (std::abs (measured - analog) < 0.5f,
+               "High shelf @ 18 kHz: " + String (measured, 2) + " dB vs analog " + String (analog, 2) + " dB (no cramping)");
+    }
+
+    // 11. Gain Match: гучність виходу вирівнюється з входом
+    {
+        SpacenerdMasterProcessor p;
+        p.setCurrentProgram (2);                   // Modern Stoner: гучніше за вхід
+        setParam (p, ParamIDs::gainMatch, 1.0f);
+        sn::LoudnessMeter inRef; inRef.prepare (48000.0, 2);
+        std::mt19937 rng (3);
+        std::normal_distribution<float> nd (0.0f, 0.08f);
+        auto out = run (p, 48000.0, 15, [&] (AudioBuffer<float>& b, int64 start)
+        {
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                const double t = (double) (start + i) / 48000.0;
+                const float v = 0.2f * (float) std::sin (2.0 * MathConstants<double>::pi * 82.0 * t) + nd (rng);
+                b.setSample (0, i, v); b.setSample (1, i, v);
+            }
+            inRef.process (b);
+        });
+        sn::LoudnessMeter outM; outM.prepare (48000.0, 2);
+        AudioBuffer<float> tail (2, 48000 * 4);
+        for (int ch = 0; ch < 2; ++ch) tail.copyFrom (ch, 0, out, ch, out.getNumSamples() - 48000 * 4, 48000 * 4);
+        outM.process (tail);
+        const float diff = outM.shortTerm.load() - inRef.shortTerm.load();
+        check (std::abs (diff) < 1.0f, "Gain Match: out-in loudness " + String (diff, 2) + " LU (match "
+               + String (p.matchDb.load(), 1) + " dB, meters see " + String (p.loudness.shortTerm.load(), 1) + " LUFS)");
+    }
+
+    // 12. Типи сатурації: на опорному рівні -6 dBFS гучність однакова, на гучному — без збоїв
+    {
+        float lv[3] {};
+        for (int type = 0; type < 3; ++type)
+        {
+            for (float amp : { 0.5f, 0.95f })
+            {
+                SpacenerdMasterProcessor p; allOff (p);
+                setParam (p, ParamIDs::satOn, 1.0f);
+                setParam (p, ParamIDs::satType, (float) type);
+                setParam (p, ParamIDs::drive, 60.0f);
+                auto out = run (p, 44100.0, 1, [&] (AudioBuffer<float>& b, int64 start)
+                {
+                    for (int i = 0; i < b.getNumSamples(); ++i)
+                    {
+                        const float v = amp * (float) std::sin (2.0 * MathConstants<double>::pi * 1000.0 * (double) (start + i) / 44100.0);
+                        b.setSample (0, i, v); b.setSample (1, i, v);
+                    }
+                });
+                const float r = out.getRMSLevel (0, 22050, 22050) / (amp * 0.70710678f);
+                if (amp == 0.5f) lv[type] = sn::gainToDb (r);
+                else check (std::isfinite (r) && r > 0.3f && r < 1.5f, "Sat type " + String (type) + " @ -0.4 dBFS: gain " + String (sn::gainToDb (r), 2) + " dB");
+            }
+        }
+        const float spread = std::max ({ lv[0], lv[1], lv[2] }) - std::min ({ lv[0], lv[1], lv[2] });
+        check (spread < 1.0f, "Sat types level-matched @ -6 dBFS: tube " + String (lv[0], 2) + ", tape " + String (lv[1], 2)
+               + ", soft " + String (lv[2], 2) + " dB");
+    }
+
     // 7. Стан зберігається і відновлюється
     {
         SpacenerdMasterProcessor a, b;
@@ -274,7 +358,8 @@ int main (int argc, char* argv[])
             p.inPeak[0].push (0.5f); p.inPeak[1].push (0.4f);
             p.outPeak[0].push (0.85f); p.outPeak[1].push (0.8f);
             p.compGr.push (3.2f); p.limGr.push (1.4f);
-            static_cast<MainContent*> (e->getChildComponent (0))->meters.update();
+            for (auto* child : e->getChildren())
+                if (auto* mc = dynamic_cast<MainContent*> (child)) mc->tick();
         }
         auto img = e->createComponentSnapshot (e->getLocalBounds(), true, 1.5f);
         File f (argv[1]);

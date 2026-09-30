@@ -3,7 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 #include "Parameters.h"
-#include "DSP.h"
+#include "MasterDSP.h"
 #include "Presets.h"
 
 class SpacenerdMasterProcessor final : public juce::AudioProcessor
@@ -36,41 +36,50 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    /** Скидає Integrated LUFS і максимум true peak. */
+    void resetMeters() noexcept { loudness.requestReset(); inLoudness.requestReset(); tpMaxReset.store (true); }
+
     juce::AudioProcessorValueTreeState apvts;
 
     // Метри (читає UI)
     std::array<sn::AtomicMax, 2> inPeak, outPeak;
     sn::AtomicMax compGr, limGr;
-    sn::LoudnessMeter loudness;
+    sn::LoudnessMeter loudness, inLoudness;
+    std::atomic<float> truePeakMax { 0.0f };   // лінійний, від останнього скидання
+    std::atomic<float> matchDb { 0.0f };        // поточна корекція Gain Match
 
 private:
     float p (const char* id) const { return params.at (id)->load (std::memory_order_relaxed); }
     bool on (const char* id) const { return p (id) > 0.5f; }
-    void updateEq();
-    std::atomic<int> currentPreset { 0 };
+    void updateEq (bool force);
     void processChunk (juce::AudioBuffer<float>&);
-    int maxBlock = 512;
+    void measureTruePeak (juce::dsp::Oversampling<float>&, const juce::AudioBuffer<float>&, int numCh, int n, float* dest);
 
     std::map<juce::String, std::atomic<float>*> params;
+    std::atomic<int> currentPreset { 0 };
+    std::atomic<bool> tpMaxReset { false };
+    int maxBlock = 512;
 
-    using Filter = juce::dsp::IIR::Filter<float>;
-    using Coeffs = juce::dsp::IIR::Coefficients<float>;
+    // EQ в оверсемплованому домені: без стискання АЧХ біля Найквіста (cramping)
     static constexpr int kEqBands = 4;
-    std::array<std::array<Filter, kEqBands>, 2> eq;     // [канал][смуга], максимум стерео
-    std::array<float, 9> eqCache {};
+    std::array<std::array<sn::Biquad, kEqBands>, 2> eq;
+    std::array<float, 8> eqCur {}, eqTarget {};
 
     sn::Compressor comp;
+    sn::TubeStage tube;
+    sn::TapeStage tape;
     sn::Limiter limiter;
-    std::unique_ptr<juce::dsp::Oversampling<float>> oversampler;   // сатурація
-    std::unique_ptr<juce::dsp::Oversampling<float>> tpDetector;    // детектор true peak
-    std::vector<float> peakBuf;
+    std::unique_ptr<juce::dsp::Oversampling<float>> oversampler, tpDetector, tpOut;
+    std::vector<float> peakBuf, outTpBuf;
     juce::dsp::LinkwitzRileyFilter<float> sideHpf;
 
-    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> inGainSm, outGainSm, limGainSm;
+    juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> inGainSm, outGainSm, limGainSm, matchSm;
     juce::SmoothedValue<float> widthSm;
+    float matchState = 0.0f;
 
-    double fs = 44100.0;
+    double fs = 44100.0, osFs = 176400.0;
     static constexpr int kOsOrder = 2; // 2^2 = 4x
+    static constexpr float kSatRef = 0.5f; // -6 dBFS: опорний рівень сатурації на майстер-шині
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpacenerdMasterProcessor)
 };

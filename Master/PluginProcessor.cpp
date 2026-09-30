@@ -26,13 +26,16 @@ void SpacenerdMasterProcessor::prepareToPlay (double sampleRate, int samplesPerB
 {
     fs = sampleRate;
     maxBlock = std::max (1, samplesPerBlock);
-    const int numCh = getTotalNumOutputChannels();
+    const int numCh = std::min (2, getTotalNumOutputChannels());
+    constexpr int factor = 1 << kOsOrder;
+    osFs = fs * factor;
 
     for (auto& chain : eq) for (auto& f : chain) f.reset();
-    eqCache.fill (std::numeric_limits<float>::quiet_NaN());
-    updateEq();
+    updateEq (true);
 
-    comp.prepare (fs, numCh);
+    comp.prepare (osFs, numCh);
+    tube.prepare (osFs, numCh, kSatRef);
+    tape.prepare (osFs, numCh, kSatRef);
 
     sideHpf.setType (juce::dsp::LinkwitzRileyFilterType::highpass);
     sideHpf.prepare ({ fs, (juce::uint32) samplesPerBlock, 1 });
@@ -41,15 +44,16 @@ void SpacenerdMasterProcessor::prepareToPlay (double sampleRate, int samplesPerB
     using OS = juce::dsp::Oversampling<float>;
     oversampler = std::make_unique<OS> ((size_t) numCh, (size_t) kOsOrder, OS::filterHalfBandFIREquiripple, true, true);
     oversampler->initProcessing ((size_t) samplesPerBlock);
-
     tpDetector = std::make_unique<OS> ((size_t) numCh, (size_t) kOsOrder, OS::filterHalfBandFIREquiripple, true, false);
     tpDetector->initProcessing ((size_t) samplesPerBlock);
+    tpOut = std::make_unique<OS> ((size_t) numCh, (size_t) kOsOrder, OS::filterHalfBandFIREquiripple, false, false);
+    tpOut->initProcessing ((size_t) samplesPerBlock);
     peakBuf.assign ((size_t) samplesPerBlock, 0.0f);
+    outTpBuf.assign ((size_t) samplesPerBlock, 0.0f);
 
-    // Вимірюємо затримку детектора імпульсом (лише шлях "вгору")
+    // Затримка детектора true peak (лише шлях "вгору"), вимірюємо імпульсом
     int detectorDelay = 0;
     {
-        constexpr int factor = 1 << kOsOrder;
         juce::AudioBuffer<float> probe (numCh, samplesPerBlock);
         long long osIndex = 0, found = -1;
         float best = 0.0f;
@@ -66,47 +70,76 @@ void SpacenerdMasterProcessor::prepareToPlay (double sampleRate, int samplesPerB
         tpDetector->reset();
     }
 
-    // Lookahead ≈ 1.5 мс
-    const int lookahead = std::max (4, (int) std::round (0.0015 * fs));
+    // Lookahead 4 мс: менше спотворень на басу, ніж у коротких лімітерах
+    const int lookahead = std::max (4, (int) std::round (0.004 * fs));
     limiter.prepare (fs, numCh, lookahead, detectorDelay);
 
     setLatencySamples ((int) std::round (oversampler->getLatencyInSamples()) + limiter.getLatency());
 
     loudness.prepare (fs, numCh);
+    inLoudness.prepare (fs, numCh);
 
-    for (auto* sm : { &inGainSm, &outGainSm, &limGainSm })
+    for (auto* sm : { &inGainSm, &outGainSm, &limGainSm, &matchSm })
         sm->reset (fs, 0.03);
     widthSm.reset (fs, 0.03);
 
     inGainSm.setCurrentAndTargetValue  (dbToGain (p (ParamIDs::inGain)));
     outGainSm.setCurrentAndTargetValue (dbToGain (p (ParamIDs::outGain)));
     limGainSm.setCurrentAndTargetValue (dbToGain (on (ParamIDs::limOn) ? p (ParamIDs::limGain) : 0.0f));
-    widthSm.setCurrentAndTargetValue   (p (ParamIDs::width) * 0.01f);
-
+    matchSm.setCurrentAndTargetValue (1.0f);
+    widthSm.setCurrentAndTargetValue (p (ParamIDs::width) * 0.01f);
+    matchState = 0.0f;
+    matchDb.store (0.0f);
 }
 
-void SpacenerdMasterProcessor::updateEq()
+void SpacenerdMasterProcessor::updateEq (bool force)
 {
-    const std::array<float, 9> v {
-        p (ParamIDs::hpfFreq),
-        p (ParamIDs::lowGain),  p (ParamIDs::lowFreq),
-        p (ParamIDs::midGain),  p (ParamIDs::midFreq), p (ParamIDs::midQ),
-        p (ParamIDs::highGain), p (ParamIDs::highFreq),
-        (float) fs };
+    eqTarget = { p (ParamIDs::hpfFreq),
+                 p (ParamIDs::lowGain),  p (ParamIDs::lowFreq),
+                 p (ParamIDs::midGain),  p (ParamIDs::midFreq), p (ParamIDs::midQ),
+                 p (ParamIDs::highGain), p (ParamIDs::highFreq) };
 
-    if (v == eqCache) return;
-    eqCache = v;
+    bool changed = force;
+    for (size_t i = 0; i < eqCur.size(); ++i)
+    {
+        const float t = eqTarget[i];
+        float& c = eqCur[i];
+        if (force) { c = t; continue; }
+        const float d = t - c;
+        if (std::abs (d) > 1.0e-4f * (1.0f + std::abs (t))) { c += d * 0.06f; changed = true; }
+        else if (c != t) { c = t; changed = true; }
+    }
+    if (! changed) return;
 
-    const auto nyq = (float) fs * 0.45f;
-    std::array<Coeffs::Ptr, kEqBands> c {
-        Coeffs::makeHighPass  (fs, std::min (v[0], nyq)),
-        Coeffs::makeLowShelf  (fs, std::min (v[2], nyq), 0.707f, dbToGain (v[1])),
-        Coeffs::makePeakFilter(fs, std::min (v[4], nyq), v[5],   dbToGain (v[3])),
-        Coeffs::makeHighShelf (fs, std::min (v[7], nyq), 0.707f, dbToGain (v[6])) };
+    sn::Biquad hp, lo, mid, hi;
+    if (eqCur[0] >= 15.0f) hp.setHighPass (osFs, eqCur[0]); else hp.setBypass();
+    lo.setLowShelf  (osFs, eqCur[2], 0.707, eqCur[1]);
+    mid.setPeak     (osFs, eqCur[4], eqCur[5], eqCur[3]);
+    hi.setHighShelf (osFs, eqCur[7], 0.707, eqCur[6]);
 
     for (auto& chain : eq)
-        for (int b = 0; b < kEqBands; ++b)
-            chain[(size_t) b].coefficients = c[(size_t) b];
+    {
+        chain[0].copyCoeffs (hp); chain[1].copyCoeffs (lo);
+        chain[2].copyCoeffs (mid); chain[3].copyCoeffs (hi);
+    }
+}
+
+void SpacenerdMasterProcessor::measureTruePeak (juce::dsp::Oversampling<float>& os, const juce::AudioBuffer<float>& buffer,
+                                                int numCh, int n, float* dest)
+{
+    juce::dsp::AudioBlock<const float> block (buffer.getArrayOfReadPointers(), (size_t) numCh, (size_t) n);
+    auto up = os.processSamplesUp (block);
+    constexpr int factor = 1 << kOsOrder;
+    for (int i = 0; i < n; ++i)
+    {
+        float pk = 0.0f;
+        for (int ch = 0; ch < numCh; ++ch)
+        {
+            const auto* d = up.getChannelPointer ((size_t) ch) + i * factor;
+            for (int k = 0; k < factor; ++k) pk = std::max (pk, std::abs (d[k]));
+        }
+        dest[i] = pk;
+    }
 }
 
 void SpacenerdMasterProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
@@ -132,42 +165,66 @@ void SpacenerdMasterProcessor::processChunk (juce::AudioBuffer<float>& buffer)
     for (int ch = numCh; ch < buffer.getNumChannels(); ++ch)
         buffer.clear (ch, 0, n);
 
+    const bool match = on (ParamIDs::gainMatch);
+    if (match) inLoudness.process (buffer);   // гучність оригіналу (те, що звучить у Bypass)
+
     // --- Вхід
     inGainSm.setTargetValue (dbToGain (p (ParamIDs::inGain)));
     inGainSm.applyGain (buffer, n);
 
-    for (int ch = 0; ch < std::min (numCh, 2); ++ch)
+    for (int ch = 0; ch < numCh; ++ch)
         inPeak[(size_t) ch].push (buffer.getMagnitude (ch, 0, n));
 
-    // --- EQ
-    if (on (ParamIDs::eqOn))
+    // --- 4x: EQ → компресор → сатурація
     {
-        updateEq();
-        const bool hpfActive = p (ParamIDs::hpfFreq) >= 15.0f;
+        juce::dsp::AudioBlock<float> block (buffer.getArrayOfWritePointers(), (size_t) numCh, (size_t) n);
+        auto up = oversampler->processSamplesUp (block);
+        const int on_ = (int) up.getNumSamples();
+        float* osData[2] = { up.getChannelPointer (0), numCh > 1 ? up.getChannelPointer (1) : nullptr };
 
-        for (int ch = 0; ch < numCh; ++ch)
+        if (on (ParamIDs::eqOn))
         {
-            auto* d = buffer.getWritePointer (ch);
-            auto& chain = eq[(size_t) ch];
-            for (int i = 0; i < n; ++i)
+            constexpr int sub = 32;
+            for (int start = 0; start < on_; start += sub)
             {
-                float x = d[i];
-                if (hpfActive) x = chain[0].processSample (x);
-                x = chain[1].processSample (x);
-                x = chain[2].processSample (x);
-                x = chain[3].processSample (x);
-                d[i] = x;
+                updateEq (false);
+                const int len = std::min (sub, on_ - start);
+                for (int ch = 0; ch < numCh; ++ch)
+                {
+                    auto& chain = eq[(size_t) ch];
+                    auto* d = osData[ch] + start;
+                    for (int i = 0; i < len; ++i)
+                    {
+                        float x = d[i];
+                        for (auto& f : chain) x = f.process (x);
+                        d[i] = x;
+                    }
+                }
             }
         }
-    }
 
-    // --- Компресор
-    if (on (ParamIDs::compOn))
-    {
-        const Compressor::Settings s {
-            p (ParamIDs::threshold), p (ParamIDs::ratio), p (ParamIDs::attack), p (ParamIDs::release),
-            p (ParamIDs::knee), p (ParamIDs::scHpf), p (ParamIDs::makeup), p (ParamIDs::compMix) * 0.01f };
-        compGr.push (comp.process (buffer, s));
+        if (on (ParamIDs::compOn))
+        {
+            const Compressor::Settings s {
+                p (ParamIDs::threshold), p (ParamIDs::ratio), p (ParamIDs::attack), p (ParamIDs::release),
+                p (ParamIDs::knee), p (ParamIDs::scHpf), p (ParamIDs::makeup), p (ParamIDs::compMix) * 0.01f,
+                on (ParamIDs::compAuto) };
+            compGr.push (comp.process (osData, numCh, on_, s));
+        }
+
+        if (on (ParamIDs::satOn))
+        {
+            const float drive = p (ParamIDs::drive), mix = p (ParamIDs::satMix) * 0.01f;
+            switch ((int) p (ParamIDs::satType))
+            {
+                // Усі типи відкалібровані на -6 dBFS: перемикання не стрибає гучністю
+                case 0:  tube.process (up, drive, 40.0f, mix); break;
+                case 1:  tape.process (up, drive, sn::TapeStage::ips30, mix); break;
+                default: sn::SoftClip::process (up, drive, mix, kSatRef); break;
+            }
+        }
+
+        oversampler->processSamplesDown (block);
     }
 
     // --- Ширина стерео (M/S) і моно-баси
@@ -190,47 +247,43 @@ void SpacenerdMasterProcessor::processChunk (juce::AudioBuffer<float>& buffer)
         }
     }
 
-    // --- Сатурація з 4x оверсемплінгом (завжди в тракті, щоб затримка не змінювалась)
-    {
-        juce::dsp::AudioBlock<float> block (buffer.getArrayOfWritePointers(), (size_t) numCh, (size_t) n);
-        auto up = oversampler->processSamplesUp (block);
-        if (on (ParamIDs::satOn))
-            Saturator::process (up, p (ParamIDs::drive), p (ParamIDs::satMix) * 0.01f);
-        oversampler->processSamplesDown (block);
-    }
-
     // --- Лімітер: драйв, детекція true peak, lookahead
     const bool limActive = on (ParamIDs::limOn);
     limGainSm.setTargetValue (dbToGain (limActive ? p (ParamIDs::limGain) : 0.0f));
     limGainSm.applyGain (buffer, n);
-    {
-        juce::dsp::AudioBlock<const float> block (buffer.getArrayOfReadPointers(), (size_t) numCh, (size_t) n);
-        auto up = tpDetector->processSamplesUp (block);
-        constexpr int factor = 1 << kOsOrder;
-        for (int i = 0; i < n; ++i)
-        {
-            float pk = 0.0f;
-            for (int ch = 0; ch < numCh; ++ch)
-            {
-                const auto* d = up.getChannelPointer ((size_t) ch) + i * factor;
-                for (int k = 0; k < factor; ++k) pk = std::max (pk, std::abs (d[k]));
-            }
-            peakBuf[(size_t) i] = pk;
-        }
-
-        const float minG = limiter.process (buffer.getArrayOfWritePointers(), numCh, n, peakBuf.data(),
-                                            dbToGain (p (ParamIDs::ceiling)), p (ParamIDs::limRel), limActive);
-        limGr.push (-gainToDb (minG));
-    }
+    measureTruePeak (*tpDetector, buffer, numCh, n, peakBuf.data());
+    const float minG = limiter.process (buffer.getArrayOfWritePointers(), numCh, n, peakBuf.data(),
+                                        dbToGain (p (ParamIDs::ceiling)), p (ParamIDs::limRel), limActive);
+    limGr.push (-gainToDb (minG));
 
     // --- Вихід
     outGainSm.setTargetValue (dbToGain (p (ParamIDs::outGain)));
     outGainSm.applyGain (buffer, n);
 
-    for (int ch = 0; ch < std::min (numCh, 2); ++ch)
+    for (int ch = 0; ch < numCh; ++ch)
         outPeak[(size_t) ch].push (buffer.getMagnitude (ch, 0, n));
 
+    measureTruePeak (*tpOut, buffer, numCh, n, outTpBuf.data());
+    float tp = tpMaxReset.exchange (false) ? 0.0f : truePeakMax.load();
+    for (int i = 0; i < n; ++i) tp = std::max (tp, outTpBuf[(size_t) i]);
+    truePeakMax.store (tp);
+
     loudness.process (buffer);
+
+    // --- Gain Match: прибирає різницю гучності для чесного порівняння з Bypass (метри її не бачать)
+    float target = 0.0f;
+    if (match)
+    {
+        const float li = inLoudness.shortTerm.load(), lo = loudness.shortTerm.load();
+        if (li > -70.0f && lo > -70.0f)
+            target = juce::jlimit (-30.0f, 0.0f, li - lo);
+        else
+            target = matchState;
+    }
+    matchState += (target - matchState) * std::min (1.0f, (float) n / (float) (0.4 * fs));
+    matchDb.store (match ? matchState : 0.0f);
+    matchSm.setTargetValue (dbToGain (matchState));
+    matchSm.applyGain (buffer, n);
 }
 
 void SpacenerdMasterProcessor::setCurrentProgram (int index)
@@ -242,7 +295,7 @@ void SpacenerdMasterProcessor::setCurrentProgram (int index)
     for (auto* param : getParameters())
     {
         auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param);
-        if (ranged == nullptr) continue;
+        if (ranged == nullptr || ranged->getParameterID() == ParamIDs::gainMatch) continue;   // моніторинг, не звук
 
         float value = ranged->getDefaultValue();
         for (const auto& [id, v] : preset.values)
@@ -256,7 +309,7 @@ void SpacenerdMasterProcessor::setCurrentProgram (int index)
 
     currentPreset.store (index);
     apvts.state.setProperty ("preset", index, nullptr);
-    loudness.requestReset();
+    resetMeters();
 }
 
 const juce::String SpacenerdMasterProcessor::getProgramName (int index)

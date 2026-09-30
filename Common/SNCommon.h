@@ -5,6 +5,7 @@
 #include <array>
 #include <vector>
 #include <cmath>
+#include <algorithm>
 
 namespace sn
 {
@@ -24,88 +25,64 @@ struct AtomicMax
 };
 
 //==============================================================================
-/** Stereo-linked feed-forward компресор, soft knee, HPF у сайдчейні, паралельний мікс. */
-class Compressor
+/** Біквад (TDF-II, double) з формулами RBJ Audio EQ Cookbook.
+    Перерахунок коефіцієнтів не виділяє пам'ять — безпечно в аудіопотоці і для плавної автоматизації. */
+struct Biquad
 {
-public:
-    void prepare (double sampleRate, int /*numChannels ≤ 2*/)
+    double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+    double z1 = 0, z2 = 0;
+
+    void reset() noexcept { z1 = z2 = 0.0; }
+
+    inline float process (float xf) noexcept
     {
-        fs = sampleRate;
-        lastScFreq = -1.0f;
-        reset();
+        const double x = xf;
+        const double y = b0 * x + z1;
+        z1 = b1 * x - a1 * y + z2;
+        z2 = b2 * x - a2 * y;
+        return (float) y;
     }
 
-    void reset()
+    void copyCoeffs (const Biquad& o) noexcept { b0 = o.b0; b1 = o.b1; b2 = o.b2; a1 = o.a1; a2 = o.a2; }
+
+    void setPeak (double fs, double f, double q, double db) noexcept
     {
-        envDb = 0.0f;
-        for (auto& f : scFilters) f.reset();
+        const double A = std::pow (10.0, db / 40.0), w = w0 (fs, f), cs = std::cos (w), al = std::sin (w) / (2.0 * q);
+        set (1 + al * A, -2 * cs, 1 - al * A, 1 + al / A, -2 * cs, 1 - al / A);
     }
-
-    struct Settings { float thresholdDb, ratio, attackMs, releaseMs, kneeDb, scHpfHz, makeupDb, mix; };
-
-    /** Повертає максимальне зменшення підсилення (дБ, додатне) за блок. */
-    float process (juce::AudioBuffer<float>& buffer, const Settings& s)
+    void setLowShelf (double fs, double f, double q, double db) noexcept
     {
-        const int numCh = std::min (2, buffer.getNumChannels());
-        const int n = buffer.getNumSamples();
-
-        if (std::abs (s.scHpfHz - lastScFreq) > 0.01f)
-        {
-            auto c = juce::dsp::IIR::Coefficients<float>::makeHighPass (fs, s.scHpfHz);
-            for (auto& f : scFilters) f.coefficients = c;
-            lastScFreq = s.scHpfHz;
-        }
-
-        const float aA = std::exp (-1.0f / (0.001f * s.attackMs  * (float) fs));
-        const float aR = std::exp (-1.0f / (0.001f * s.releaseMs * (float) fs));
-        const float slope = 1.0f / s.ratio - 1.0f;
-        const float W = s.kneeDb;
-        const float makeup = dbToGain (s.makeupDb);
-        const float wet = s.mix, dry = 1.0f - s.mix;
-
-        float maxGr = 0.0f;
-        float* const* data = buffer.getArrayOfWritePointers();
-
-        for (int i = 0; i < n; ++i)
-        {
-            float sc = 0.0f;
-            for (int ch = 0; ch < numCh; ++ch)
-                sc = std::max (sc, std::abs (scFilters[(size_t) ch].processSample (data[ch][i])));
-
-            const float x = gainToDb (sc);
-            const float over = x - s.thresholdDb;
-            float gc; // ≤ 0
-
-            if (2.0f * over < -W)             gc = 0.0f;
-            else if (2.0f * std::abs (over) <= W && W > 0.0f)
-            {
-                const float t = over + 0.5f * W;
-                gc = slope * t * t / (2.0f * W);
-            }
-            else                              gc = slope * over;
-
-            const float target = -gc;
-            const float a = target > envDb ? aA : aR;
-            envDb = a * envDb + (1.0f - a) * target;
-
-            maxGr = std::max (maxGr, envDb);
-            const float g = dbToGain (-envDb) * makeup;
-
-            for (int ch = 0; ch < numCh; ++ch)
-            {
-                const float in = data[ch][i];
-                data[ch][i] = dry * in + wet * in * g;
-            }
-        }
-
-        return maxGr;
+        const double A = std::pow (10.0, db / 40.0), w = w0 (fs, f), cs = std::cos (w), al = std::sin (w) / (2.0 * q), sa = 2 * std::sqrt (A) * al;
+        set (A * ((A + 1) - (A - 1) * cs + sa), 2 * A * ((A - 1) - (A + 1) * cs), A * ((A + 1) - (A - 1) * cs - sa),
+             (A + 1) + (A - 1) * cs + sa, -2 * ((A - 1) + (A + 1) * cs), (A + 1) + (A - 1) * cs - sa);
     }
+    void setHighShelf (double fs, double f, double q, double db) noexcept
+    {
+        const double A = std::pow (10.0, db / 40.0), w = w0 (fs, f), cs = std::cos (w), al = std::sin (w) / (2.0 * q), sa = 2 * std::sqrt (A) * al;
+        set (A * ((A + 1) + (A - 1) * cs + sa), -2 * A * ((A - 1) + (A + 1) * cs), A * ((A + 1) + (A - 1) * cs - sa),
+             (A + 1) - (A - 1) * cs + sa, 2 * ((A - 1) - (A + 1) * cs), (A + 1) - (A - 1) * cs - sa);
+    }
+    void setLowPass (double fs, double f, double q) noexcept
+    {
+        const double w = w0 (fs, f), cs = std::cos (w), al = std::sin (w) / (2.0 * q);
+        set ((1 - cs) / 2, 1 - cs, (1 - cs) / 2, 1 + al, -2 * cs, 1 - al);
+    }
+    void setHighPass (double fs, double f, double q = 0.70710678) noexcept
+    {
+        const double w = w0 (fs, f), cs = std::cos (w), al = std::sin (w) / (2.0 * q);
+        set ((1 + cs) / 2, -(1 + cs), (1 + cs) / 2, 1 + al, -2 * cs, 1 - al);
+    }
+    void setBypass() noexcept { b0 = 1; b1 = b2 = a1 = a2 = 0; }
 
 private:
-    double fs = 44100.0;
-    float envDb = 0.0f;
-    float lastScFreq = -1.0f;
-    std::array<juce::dsp::IIR::Filter<float>, 2> scFilters;
+    static double w0 (double fs, double f) noexcept
+    {
+        return 2.0 * juce::MathConstants<double>::pi * std::min (f, 0.49 * fs) / fs;
+    }
+    void set (double nb0, double nb1, double nb2, double na0, double na1, double na2) noexcept
+    {
+        b0 = nb0 / na0; b1 = nb1 / na0; b2 = nb2 / na0; a1 = na1 / na0; a2 = na2 / na0;
+    }
 };
 
 //==============================================================================
@@ -138,110 +115,6 @@ private:
     std::vector<long long> idx;
     int window = 1, cap = 2, head = 0, tail = 0, count = 0;
     long long n = 0;
-};
-
-//==============================================================================
-/** True-peak lookahead лімітер.
-    Детекція йде по 4x-оверсемплованому сигналу (міжсемплові піки), а підсилення
-    застосовується на базовій частоті: плавна обвідна майже не додає нових ISP.
-    Ковзний мінімум + коробковий фільтр гарантують, що підсилення вже впало
-    до потрібного рівня на момент приходу піку. */
-class Limiter
-{
-public:
-    /** detectorDelay: затримка детектора (у семплах базової частоти). */
-    void prepare (double sampleRate, int numChannels, int lookaheadSamples, int detectorDelay)
-    {
-        fs = sampleRate;
-        L = std::max (1, lookaheadSamples);
-        totalDelay = std::max (0, detectorDelay) + L;
-        minFilter.prepare (L);
-        box.assign ((size_t) L, 1.0);
-        delay.assign ((size_t) numChannels, std::vector<float> ((size_t) totalDelay + 1, 0.0f));
-        reset();
-    }
-
-    void reset()
-    {
-        minFilter.reset();
-        std::fill (box.begin(), box.end(), 1.0);
-        boxSum = (double) L;
-        for (auto& d : delay) std::fill (d.begin(), d.end(), 0.0f);
-        pos = boxPos = 0;
-        p1 = p2 = 0.0f;
-        g = 1.0f;
-    }
-
-    int getLatency() const noexcept { return totalDelay; }
-
-    /** peaks[i] — пік (true peak) для семпла i, затриманий на detectorDelay.
-        Повертає мінімальне підсилення (лінійне) за блок. */
-    float process (float* const* data, int numCh, int n, const float* peaks,
-                   float ceilingLin, float releaseMs, bool active)
-    {
-        const float relCoef = std::exp (-1.0f / (0.001f * releaseMs * (float) fs));
-        const int size = totalDelay + 1;
-        float minG = 1.0f;
-
-        for (int i = 0; i < n; ++i)
-        {
-            // Розширення піку на ±1 семпл: запас на неточність вирівнювання детектора
-            const float pk = std::max ({ peaks[i], p1, p2 });
-            p2 = p1; p1 = peaks[i];
-
-            const float req = (active && pk > ceilingLin) ? ceilingLin / pk : 1.0f;
-            const float h = minFilter.push (req);
-            boxSum += (double) h - box[(size_t) boxPos];
-            box[(size_t) boxPos] = h;
-            boxPos = (boxPos + 1) % L;
-            const float s = std::min (1.0f, (float) (boxSum / (double) L));
-
-            g = (s < g) ? s : s + (g - s) * relCoef;
-            minG = std::min (minG, g);
-
-            const int readPos = (pos + 1) % size;
-            for (int ch = 0; ch < numCh; ++ch)
-            {
-                auto& d = delay[(size_t) ch];
-                d[(size_t) pos] = data[ch][i];
-                const float delayed = d[(size_t) readPos];
-                data[ch][i] = active ? delayed * g : delayed;
-            }
-            pos = (pos + 1) % size;
-        }
-        return minG;
-    }
-
-private:
-    double fs = 44100.0;
-    int L = 1, totalDelay = 1, pos = 0, boxPos = 0;
-    float g = 1.0f, p1 = 0.0f, p2 = 0.0f;
-    SlidingMin minFilter;
-    std::vector<double> box;
-    double boxSum = 1.0;
-    std::vector<std::vector<float>> delay;
-};
-
-//==============================================================================
-/** М'яка сатурація (tanh) з одиничним підсиленням на рівні близько -12 dBFS. */
-struct Saturator
-{
-    static void process (juce::dsp::AudioBlock<float>& block, float drivePct, float mix)
-    {
-        const float k = 1.0f + 0.04f * drivePct;           // 1…5
-        const float norm = 0.25f / std::tanh (k * 0.25f);  // компенсація рівня
-        const float dry = 1.0f - mix;
-
-        for (size_t ch = 0; ch < block.getNumChannels(); ++ch)
-        {
-            auto* d = block.getChannelPointer (ch);
-            for (size_t i = 0; i < block.getNumSamples(); ++i)
-            {
-                const float x = d[i];
-                d[i] = dry * x + mix * std::tanh (k * x) * norm;
-            }
-        }
-    }
 };
 
 //==============================================================================
