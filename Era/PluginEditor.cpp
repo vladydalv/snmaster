@@ -8,13 +8,17 @@ using namespace EraIDs;
 EraPad::EraPad (SpacenerdEraProcessor& p)
     : proc (p),
       yearAtt (*p.apvts.getParameter (year),      [this] (float v) { yearVal = v; repaint(); }, nullptr),
-      intAtt  (*p.apvts.getParameter (intensity), [this] (float v) { intVal = v;  repaint(); }, nullptr)
+      intAtt  (*p.apvts.getParameter (intensity), [this] (float v) { intVal = v;  repaint(); }, nullptr),
+      lowAtt  (*p.apvts.getParameter (yearLow),   [this] (float v) { lowVal = v;  repaint(); }, nullptr),
+      highAtt (*p.apvts.getParameter (yearHigh),  [this] (float v) { highVal = v; repaint(); }, nullptr)
 {
     yearAtt.sendInitialUpdate();
     intAtt.sendInitialUpdate();
+    lowAtt.sendInitialUpdate();
+    highAtt.sendInitialUpdate();
     for (auto& f : flicker) f = rng.nextFloat();
     setMouseCursor (MouseCursor::CrosshairCursor);
-    setTooltip ("Drag: left-right = year, up-down = intensity. Double-click: reset.");
+    setTooltip ("Drag: left-right = year, up-down = intensity. SPLIT: drag the LOW (bass) and HIGH (top end) handles. Double-click: reset.");
 }
 
 Colour EraPad::eraColour (float y)
@@ -87,10 +91,13 @@ void EraPad::paint (Graphics& g)
     {
         const float yr = 1960.0f + (float) c;
         const auto col = eraColour (yr);
-        const float dx = yr - yearVal;
-        const float prox = std::exp (-dx * dx / (2.0f * 7.0f * 7.0f));
+        auto proxTo = [yr] (float target) { const float dx = yr - target; return std::exp (-dx * dx / (2.0f * 7.0f * 7.0f)); };
+        const bool sp = splitOn();
         for (int r = 0; r < rows; ++r)
         {
+            // У режимі Split: нижні ряди «світяться» біля року LOW (бас), верхні — біля HIGH (верх)
+            const float prox = ! sp ? proxTo (yearVal)
+                             : (r < rows / 3 ? proxTo (lowVal) : (r >= rows - rows / 3 ? proxTo (highVal) : proxTo (yearVal)));
             const float rowFrac = (float) r / (float) (rows - 1);
             const float band = bands[(size_t) jlimit (0, (int) bands.size() - 1, roundToInt (rowFrac * (float) (bands.size() - 1)))];
             const bool under = (float) r <= intRow;
@@ -104,21 +111,38 @@ void EraPad::paint (Graphics& g)
         }
     }
 
-    // Маркери епох для низу і верху (режим Split)
-    if (proc.apvts.getRawParameterValue (split)->load() > 0.5f)
+    // Ручки LOW (бас) і HIGH (верх) у режимі Split
+    if (splitOn())
     {
-        auto marker = [&] (float yr, const String& tag, Colour c)
+        auto handle = [&] (bool low)
         {
-            const float x = gr.getX() + (yr - 1960.0f + 0.5f) * cw;
-            Path tri;
-            tri.addTriangle (x, gr.getBottom() + 2.0f, x - 6.0f, gr.getBottom() + 11.0f, x + 6.0f, gr.getBottom() + 11.0f);
+            const float yr = low ? lowVal : highVal;
+            const auto c = eraColour (yr);
+            const auto h = handleRect (low);
+            const float x = h.getCentreX();
+            // Пунктир через свою третину дисплея
+            const float y0 = low ? gr.getBottom() - gr.getHeight() / 3.0f : gr.getY();
+            const float y1 = low ? gr.getBottom() : gr.getY() + gr.getHeight() / 3.0f;
+            Path line; line.startNewSubPath (x, y0); line.lineTo (x, y1);
+            Path dashed; const float d[] { 4.0f, 3.0f };
+            PathStrokeType (1.5f).createDashedStroke (dashed, line, d, 2);
+            g.setColour (c.withAlpha (0.8f));
+            g.fillPath (dashed);
+            const bool active = drag == (low ? Drag::low : Drag::high);
+            g.setColour (Theme::bg.withAlpha (0.85f));
+            g.fillRoundedRectangle (h, 9.0f);
             g.setColour (c);
-            g.fillPath (tri);
-            g.setFont (FontOptions (9.0f, Font::bold));
-            g.drawText (tag, Rectangle<float> (x - 20.0f, gr.getBottom() + 11.0f, 40.0f, 10.0f), Justification::centred);
+            g.drawRoundedRectangle (h, 9.0f, active ? 2.2f : 1.4f);
+            g.setFont (FontOptions (10.0f, Font::bold));
+            g.drawText ((low ? "LOW " : "HIGH ") + String (roundToInt (yr)), h, Justification::centred);
         };
-        marker (proc.apvts.getRawParameterValue (yearLow)->load(),  "LOW",  eraColour (proc.apvts.getRawParameterValue (yearLow)->load()));
-        marker (proc.apvts.getRawParameterValue (yearHigh)->load(), "HIGH", eraColour (proc.apvts.getRawParameterValue (yearHigh)->load()));
+        handle (true);
+        handle (false);
+
+        g.setColour (Theme::muted);
+        g.setFont (FontOptions (9.0f, Font::bold));
+        g.drawText ("TOP END", Rectangle<float> (gr.getRight() - 70.0f, gr.getY() - 14.0f, 70.0f, 12.0f), Justification::centredRight);
+        g.drawText ("BASS", Rectangle<float> (gr.getRight() - 70.0f, gr.getBottom() + 2.0f, 70.0f, 12.0f), Justification::centredRight);
     }
 
     // Курсор
@@ -145,10 +169,23 @@ void EraPad::paint (Graphics& g)
     g.drawText ("INTENSITY", Rectangle<float> (18.0f - 60.0f, gr.getCentreY() - 7.0f, 120.0f, 14.0f), Justification::centred);
 }
 
+bool EraPad::splitOn() const { return proc.apvts.getRawParameterValue (split)->load() > 0.5f; }
+
+Rectangle<float> EraPad::handleRect (bool low) const
+{
+    const auto gr = grid();
+    const float cw = gr.getWidth() / (float) cols;
+    const float x = gr.getX() + ((low ? lowVal : highVal) - 1960.0f + 0.5f) * cw;
+    const float y = low ? gr.getBottom() - 24.0f : gr.getY() + 6.0f;
+    return { x - 38.0f, y, 76.0f, 18.0f };
+}
+
 void EraPad::setFromPoint (Point<float> p)
 {
     const auto gr = grid();
     const float y = jlimit (1960.0f, 2025.0f, 1960.0f + (p.x - gr.getX()) / gr.getWidth() * (float) cols - 0.5f);
+    if (drag == Drag::low)  { lowAtt.setValueAsPartOfGesture (y);  return; }
+    if (drag == Drag::high) { highAtt.setValueAsPartOfGesture (y); return; }
     const float i = jlimit (0.0f, 100.0f, (gr.getBottom() - p.y) / gr.getHeight() * 100.0f);
     yearAtt.setValueAsPartOfGesture (y);
     intAtt.setValueAsPartOfGesture (i);
@@ -156,19 +193,34 @@ void EraPad::setFromPoint (Point<float> p)
 
 void EraPad::mouseDown (const MouseEvent& e)
 {
-    dragging = true;
-    yearAtt.beginGesture(); intAtt.beginGesture();
+    drag = Drag::main;
+    if (splitOn())
+    {
+        // Ручки мають пріоритет над основним курсором
+        if (handleRect (true).expanded (6.0f).contains (e.position))       drag = Drag::low;
+        else if (handleRect (false).expanded (6.0f).contains (e.position)) drag = Drag::high;
+    }
+    if (drag == Drag::low)       lowAtt.beginGesture();
+    else if (drag == Drag::high) highAtt.beginGesture();
+    else                         { yearAtt.beginGesture(); intAtt.beginGesture(); }
     setFromPoint (e.position);
 }
-void EraPad::mouseDrag (const MouseEvent& e) { if (dragging) setFromPoint (e.position); }
+
+void EraPad::mouseDrag (const MouseEvent& e) { if (drag != Drag::none) setFromPoint (e.position); }
+
 void EraPad::mouseUp (const MouseEvent&)
 {
-    if (! dragging) return;
-    dragging = false;
-    yearAtt.endGesture(); intAtt.endGesture();
+    if (drag == Drag::low)        lowAtt.endGesture();
+    else if (drag == Drag::high)  highAtt.endGesture();
+    else if (drag == Drag::main)  { yearAtt.endGesture(); intAtt.endGesture(); }
+    drag = Drag::none;
+    repaint();
 }
-void EraPad::mouseDoubleClick (const MouseEvent&)
+
+void EraPad::mouseDoubleClick (const MouseEvent& e)
 {
+    if (splitOn() && handleRect (true).expanded (6.0f).contains (e.position))  { lowAtt.setValueAsCompleteGesture (1972.0f); return; }
+    if (splitOn() && handleRect (false).expanded (6.0f).contains (e.position)) { highAtt.setValueAsCompleteGesture (2015.0f); return; }
     yearAtt.setValueAsCompleteGesture (1975.0f);
     intAtt.setValueAsCompleteGesture (60.0f);
 }

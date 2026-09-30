@@ -25,12 +25,15 @@ private:
     static juce::Colour eraColour (float year);
 
     SpacenerdEraProcessor& proc;
-    juce::ParameterAttachment yearAtt, intAtt;
-    float yearVal = 1975.0f, intVal = 60.0f;
+    juce::ParameterAttachment yearAtt, intAtt, lowAtt, highAtt;
+    float yearVal = 1975.0f, intVal = 60.0f, lowVal = 1972.0f, highVal = 2015.0f;
+    enum class Drag { none, main, low, high };
+    Drag drag = Drag::none;
+    bool splitOn() const;
+    juce::Rectangle<float> handleRect (bool low) const;
     std::array<float, SpacenerdEraProcessor::kBands> bands {};
     std::array<float, cols * rows> flicker {};
     juce::Random rng;
-    bool dragging = false;
 };
 
 class EraContent final : public juce::Component

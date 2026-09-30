@@ -234,7 +234,7 @@ int main (int argc, char* argv[])
     if (argc > 1)
     {
         SpacenerdEraProcessor p; p.setCurrentProgram (1);
-        process (music, [] (SpacenerdEraProcessor&) {}, &p);
+        process (music, [] (SpacenerdEraProcessor& q) { set (q, split, 1.0f); set (q, yearLow, 1970.0f); set (q, yearHigh, 2012.0f); }, &p);
         std::unique_ptr<AudioProcessorEditor> ed (p.createEditor());
         for (int f = 0; f < 8; ++f)
         {
