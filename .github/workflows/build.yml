@@ -1,0 +1,47 @@
+name: Build macOS (AU + VST3, Universal)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (arm64 + x86_64)
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=Release
+          "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
+
+      - name: Build
+        run: cmake --build build --config Release -j 4
+
+      - name: Ad-hoc sign and package
+        run: |
+          ART="build/SpacenerdMaster_artefacts/Release"
+          AU="$ART/AU/Spacenerd Master.component"
+          VST3="$ART/VST3/Spacenerd Master.vst3"
+          codesign --force --deep --sign - "$AU"
+          codesign --force --deep --sign - "$VST3"
+          echo "Architectures:"; lipo -archs "$AU/Contents/MacOS/Spacenerd Master"
+          mkdir -p dist
+          ditto -c -k --keepParent "$AU"   "dist/Spacenerd Master AU.zip"
+          ditto -c -k --keepParent "$VST3" "dist/Spacenerd Master VST3.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SpacenerdMaster-macOS
+          path: dist/*.zip
+
+      - name: Validate AU (auval)
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "build/SpacenerdMaster_artefacts/Release/AU/Spacenerd Master.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar || true
+          auval -a | grep -i spacenerd || true
+          auval -strict -v aufx Mstr Spcn
