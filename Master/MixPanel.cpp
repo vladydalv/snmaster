@@ -189,11 +189,11 @@ void MixPanel::paint (Graphics& g)
             x += 40.0f;
         }
         g.setColour (Theme::muted);
-        g.setFont (FontOptions (12.5f));
+        g.setFont (FontOptions (12.0f));
         g.drawFittedText ("Put SN Listen on each track (last plugin in the chain). Tracks show up here green / yellow / red, "
                           "with what to fix for the chosen genre. Hover for tips, click for details.",
                           Rectangle<int> ((int) x + 16, (int) r.getY() + 4, (int) (r.getRight() - x - 20), (int) r.getHeight() - 10),
-                          Justification::centredLeft, 3);
+                          Justification::centredLeft, 3, 1.0f);
     }
 }
 

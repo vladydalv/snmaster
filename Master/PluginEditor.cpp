@@ -154,7 +154,9 @@ MainContent::MainContent (SpacenerdMasterProcessor& p)
 
     matchButton.setTooltip ("Gain Match: output level follows input loudness, so Bypass compares at equal loudness. Turn off before bouncing.");
     abButton.setTooltip ("Hear your reference instead of your master, at the same loudness, from the same song position. Turn off before bouncing.");
-    listenSel.setTooltip ("Check how the master translates: phone speaker, earbuds, car, mono. Monitoring only: set back to Studio before bouncing!");
+    listenSel.setTooltip ("Check how the master translates: phone speaker, earbuds, car, mono. STREAM: as heard after Spotify-style loudness normalisation "
+                          "for the 'Release for' target (turned down if louder; up only to -1 dBTP) with a lossy-like 16 kHz band limit. "
+                          "Monitoring only: set back to Studio before bouncing!");
     refButton.setTooltip ("Load a record you want to sound like (WAV/AIFF/MP3/FLAC). It becomes the analyzer target and the A/B reference. Right-click: remove.");
     refButton.onClick = [this]
     {
@@ -186,7 +188,7 @@ void MainContent::tick()
     presetBox.sync();
     const float m = proc.matchDb.load();
     if (std::abs (m - shownMatch) > 0.05f) { shownMatch = m; repaint (0, 0, getWidth(), 56); }
-    repaint (listenSel.getBounds().expanded (6));
+    repaint (listenSel.getBounds().expanded (6, 14));
     if (proc.isLoadingReference() != (refButton.getButtonText() == "LOADING...")) updateRefButton();
 }
 
@@ -202,6 +204,14 @@ void MainContent::paint (Graphics& g)
         g.setColour (Theme::hot.withAlpha (0.18f));
         g.fillRoundedRectangle (listenSel.getBounds().toFloat().expanded (4.0f, 3.0f), 8.0f);
     }
+    if ((int) proc.apvts.getRawParameterValue (ParamIDs::monitor)->load() == 5)
+    {
+        const float sg = proc.streamGainDb.load();
+        g.setColour (Theme::accent2);
+        g.setFont (FontOptions (10.5f, Font::bold));
+        g.drawText ("streaming plays this " + (std::abs (sg) < 0.05f ? String ("as is") : (sg > 0 ? "+" : "") + String (sg, 1) + " dB"),
+                    listenSel.getRight() - 220, listenSel.getBottom() + 2, 220, 12, Justification::centredRight);
+    }
 
     if (matchButton.getToggleState())
     {
@@ -213,11 +223,11 @@ void MainContent::paint (Graphics& g)
 
 void MainContent::resized()
 {
-    presetBox.setBounds (300, 14, 200, 28);
-    matchButton.setBounds (512, 16, 92, 24);
-    refButton.setBounds (614, 15, 180, 26);
-    abButton.setBounds (802, 16, 76, 24);
-    listenSel.setBounds (890, 14, getWidth() - 906, 28);
+    presetBox.setBounds (300, 14, 170, 28);
+    matchButton.setBounds (480, 16, 92, 24);
+    refButton.setBounds (580, 15, 144, 26);
+    abButton.setBounds (732, 16, 72, 24);
+    listenSel.setBounds (814, 14, getWidth() - 830, 28);
 
     auto r = getLocalBounds().withTrimmedTop (56).reduced (16, 0).withTrimmedBottom (16);
     constexpr int gap = 10;

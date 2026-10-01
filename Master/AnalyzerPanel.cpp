@@ -1,4 +1,5 @@
 #include "AnalyzerPanel.h"
+#include "AlbumView.h"
 
 using namespace juce;
 using namespace snui;
@@ -28,9 +29,16 @@ AnalyzerPanel::AnalyzerPanel (SpacenerdMasterProcessor& p)
     assistButton.setTooltip ("Set EQ, compressor, limiter and mono bass towards the tonal target and the streaming loudness target");
     assistButton.onClick = [this] { applyAssist(); };
     assistButton.setEnabled (false);
-    loudSel.setTooltip ("Where the song will be released: loudness verdicts and ASSIST aim for this level at -1 dBTP");
+    loudSel.setTooltip ("Where the song will be released: loudness verdicts and ASSIST aim for this level at -1 dBTP (-2 dBTP for masters louder than -14 LUFS, as Spotify recommends)");
 
-    for (auto* c : std::initializer_list<Component*> { &genreSel, &decadeSel, &loudSel, &resetButton, &assistButton })
+    albumButton.setTooltip ("Album: save each finished song and see which one differs in loudness, density or tone");
+    albumButton.onClick = [this]
+    {
+        auto* top = getTopLevelComponent();
+        CallOutBox::launchAsynchronously (std::make_unique<AlbumView> (proc), top->getLocalArea (&albumButton, albumButton.getLocalBounds()), top);
+    };
+
+    for (auto* c : std::initializer_list<Component*> { &genreSel, &decadeSel, &loudSel, &resetButton, &assistButton, &albumButton })
         addAndMakeVisible (c);
 }
 
@@ -121,7 +129,8 @@ void AnalyzerPanel::applyAssist()
     set (widthOn, 1.0f);
     if (monoBass) set (ParamIDs::monoBass, 120.0f);
 
-    set (limOn, 1.0f); set (ceiling, -1.0f); set (limRel, 60.0f); set (ParamIDs::limGain, limGain);
+    set (limOn, 1.0f); set (ceiling, ta.loudTargetLufs() > -14.0f ? -2.0f : -1.0f);   // Spotify: гучніше -14 LUFS — стеля -2 dBTP
+    set (limRel, 60.0f); set (ParamIDs::limGain, limGain);
     set (gainMatch, 0.0f);
     proc.resetMeters();
 
@@ -317,7 +326,11 @@ void AnalyzerPanel::resized()
     controls.removeFromLeft (6);
     decadeSel.setBounds (controls);
     right.removeFromTop (4);
-    loudSel.setBounds (right.removeFromTop (42).removeFromLeft (220));
+    {
+        auto row = right.removeFromTop (42);
+        loudSel.setBounds (row.removeFromLeft (220));
+        albumButton.setBounds (row.removeFromRight (120).withTrimmedTop (14).withTrimmedBottom (2));
+    }
     right.removeFromTop (6);
     auto buttons = right.removeFromBottom (26);
     resetButton.setBounds (buttons.removeFromLeft (buttons.getWidth() / 2 - 3));

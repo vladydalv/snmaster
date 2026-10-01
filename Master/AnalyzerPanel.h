@@ -34,6 +34,6 @@ private:
 
     snui::Segmented genreSel;
     snui::LabeledCombo decadeSel, loudSel;
-    juce::TextButton resetButton { "RESET" }, assistButton { "ASSIST" };
+    juce::TextButton resetButton { "RESET" }, assistButton { "ASSIST" }, albumButton { "ALBUM..." };
     juce::Rectangle<int> graphArea, verdictArea;
 };

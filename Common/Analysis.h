@@ -281,7 +281,12 @@ inline Report analyse (const Spectrum& mix, float lufsIntegrated, float truePeak
         if (plr < 6.0f)       { rep.verdicts.push_back ({ "Over-compressed / squashed (PLR " + juce::String (plr, 1) + " dB)", 2, "LIMITER: DRIVE -, COMP: THRESHOLD +" }); dynPenalty = (6.0f - plr) * 2.0f; }
         else if (plr < 8.0f)  rep.verdicts.push_back ({ "Dense, little punch left (PLR " + juce::String (plr, 1) + " dB)", 1, "COMP: ATTACK 20-30 ms, or LIMITER: DRIVE -" });
         else if (plr > 16.0f) rep.verdicts.push_back ({ "Very dynamic: may sound weak on phones (PLR " + juce::String (plr, 1) + " dB)", 1, "COMP: THRESHOLD -, RATIO 2-3" });
-        if (truePeakDb > -0.9f) rep.verdicts.push_back ({ "Peaks " + juce::String (truePeakDb, 1) + " dB: may distort after streaming encode (keep -1 dBTP)", 2, "LIMITER: ON, CEILING -1 dB" });
+        // Spotify: true peak нижче -1 dBTP; для майстрів гучніших за -14 LUFS — нижче -2 dBTP (кодування додає піки)
+        const float tpLimit = lufsIntegrated > -14.0f ? -2.0f : -1.0f;
+        if (truePeakDb > tpLimit + 0.1f)
+            rep.verdicts.push_back ({ "Peaks " + juce::String (truePeakDb, 1) + " dBTP: may distort after streaming encode (keep "
+                                      + juce::String ((int) tpLimit) + " dBTP" + (tpLimit < -1.5f ? " for masters louder than -14 LUFS)" : ")"),
+                                      2, "LIMITER: CEILING " + juce::String ((int) tpLimit) + " dB" });
     }
     if (lowSideDb > -12.0f) rep.verdicts.push_back ({ "Bass is wide (not mono)", 1, "STEREO: MONO BASS 100-150 Hz" });
     if (correlation < 0.0f)  rep.verdicts.push_back ({ "Phase problem: mix collapses in mono", 2, "STEREO: WIDTH down; check stereo tracks" });

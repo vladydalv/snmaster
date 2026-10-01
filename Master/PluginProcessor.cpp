@@ -396,9 +396,28 @@ void SpacenerdMasterProcessor::processChunk (juce::AudioBuffer<float>& buffer)
 
     // --- Лише прослуховування: референс A/B і «як звучатиме на телефоні / в авто»
     applyReference (buffer, numCh, n);
-    const int m = juce::jlimit (0, 4, (int) p (ParamIDs::monitor));
+    const int m = juce::jlimit (0, 5, (int) p (ParamIDs::monitor));
     if (m != mon.mode) mon.set (m, fs);
     mon.process (buffer, numCh, n, fs);
+
+    // Stream: як звучатиме після нормалізації сервісу. Гучніше цілі — стишується; тихіше — піднімається,
+    // але лише до запасу -1 dBTP (так робить Spotify), без лімітера.
+    float sg = 0.0f;
+    if (m == 5)
+    {
+        const float lufs = loudness.integrated.load() > -70.0f ? loudness.integrated.load() : loudness.shortTerm.load();
+        if (lufs > -70.0f)
+        {
+            const float target = kLoudTargets[(size_t) juce::jlimit (0, (int) kLoudTargets.size() - 1, (int) p (ParamIDs::loudTarget))];
+            sg = target - lufs;
+            if (sg > 0.0f) sg = std::min (sg, std::max (0.0f, -1.0f - sn::gainToDb (truePeakMax.load())));
+        }
+    }
+    streamGainDb.store (sg);
+    const float g0 = streamGainSm;
+    streamGainSm += (dbToGain (sg) - streamGainSm) * std::min (1.0f, (float) n / (float) (0.2 * fs));
+    if (std::abs (streamGainSm - 1.0f) > 1.0e-5f || std::abs (g0 - 1.0f) > 1.0e-5f)
+        for (int ch = 0; ch < numCh; ++ch) buffer.applyGainRamp (ch, 0, n, g0, streamGainSm);
 }
 
 void SpacenerdMasterProcessor::applyReference (juce::AudioBuffer<float>& buffer, int numCh, int n)
@@ -446,6 +465,9 @@ void SpacenerdMasterProcessor::Monitor::set (int m, double fs)
         case 2: // навушники-вкладиші: трохи бубнять, яскравіша присутність
             a.setHighPass (fs, 45.0, 0.707);   b.setLowShelf (fs, 110.0, 0.707, 3.0);
             c.setPeak (fs, 3000.0, 1.0, 2.5);  d.setLowPass (fs, 14000.0, 0.707); break;
+        case 5: // стрімінг: смуга обрізана, як у стиснутих форматах на звичайній якості (~16 кГц, 8-й порядок)
+            a.setLowPass (fs, 16000.0, 0.5098); b.setLowPass (fs, 16000.0, 0.6013);
+            c.setLowPass (fs, 16000.0, 0.9000); d.setLowPass (fs, 16000.0, 2.5629); break;
         case 3: // авто: роздутий бас, гул салону, тьмяний верх
             a.setLowShelf (fs, 70.0, 0.707, 5.0); b.setPeak (fs, 380.0, 1.0, -3.0);
             c.setHighShelf (fs, 5000.0, 0.707, -4.0); d.setPeak (fs, 160.0, 1.5, 2.0); break;

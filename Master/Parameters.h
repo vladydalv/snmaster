@@ -58,7 +58,7 @@ namespace ParamIDs
 
     // Порівняння й перевірка (лише прослуховування)
     inline constexpr auto refAB     = "refAB";        // слухати референс замість міксу
-    inline constexpr auto monitor   = "monitor";      // Studio / Phone / Earbuds / Car / Mono
+    inline constexpr auto monitor   = "monitor";      // Studio / Phone / Earbuds / Car / Mono / Stream (як після нормалізації стрімінгу)
 
     // М'який кліпер перед лімітером
     inline constexpr auto clip      = "clip";
@@ -162,7 +162,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
                     StringArray { "1960s", "1970s", "1980s", "1990s", "2000s", "2010s", "2020s" }, 3));
     layout.add (std::make_unique<B> (id (ParamIDs::refAB), "Reference A/B", false));
     layout.add (std::make_unique<AudioParameterChoice> (id (ParamIDs::monitor), "Listen On",
-                    StringArray { "Studio", "Phone", "Earbuds", "Car", "Mono" }, 0));
+                    StringArray { "Studio", "Phone", "Earbuds", "Car", "Mono", "Stream" }, 0));
     layout.add (std::make_unique<AudioParameterChoice> (id (ParamIDs::loudTarget), "Loudness Target",
                     StringArray { "Spotify / YouTube -14", "Apple Music -16", "Deezer -15", "Loud master -9" }, 0));
 

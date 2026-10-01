@@ -1,6 +1,7 @@
 // Офлайн-тест DSP: гучність, лімітер, затримка, стабільність. Опційно — знімок інтерфейсу.
 #include "../Master/PluginProcessor.h"
 #include "../Master/PluginEditor.h"
+#include "../Master/AlbumView.h"
 #include <juce_events/juce_events.h>
 #include <iostream>
 #include <chrono>
@@ -424,6 +425,52 @@ int main (int argc, char* argv[])
                "Listen On: studio " + String (studio, 1) + " dB, phone @60 Hz " + String (phone, 1) + " dB, mono antiphase " + String (mono, 1) + " dB");
     }
 
+    // Stream: гучний майстер стишується до цілі, тихий піднімається лише до -1 dBTP
+    {
+        const auto streamed = [] (float amp, bool spiky)
+        {
+            SpacenerdMasterProcessor p;
+            allOff (p);
+            setParam (p, ParamIDs::monitor, 5.0f);
+            setParam (p, ParamIDs::loudTarget, 0.0f);                  // Spotify -14
+            Random rnd (5);
+            auto out = run (p, 48000.0, 12, [amp, spiky, &rnd] (AudioBuffer<float>& b, int64 start)
+            {
+                for (int i = 0; i < b.getNumSamples(); ++i)
+                {
+                    const double t = (double) (start + i) / 48000.0;
+                    float v = amp * (float) (std::sin (2.0 * MathConstants<double>::pi * 220.0 * t) + 0.3 * (rnd.nextFloat() * 2 - 1));
+                    if (spiky && std::fmod (t, 0.5) < 0.004) v += 0.25f * (float) std::sin (2.0 * MathConstants<double>::pi * 1000.0 * t);   // гострі піки
+                    b.setSample (0, i, v); b.setSample (1, i, v);
+                }
+            });
+            sn::LoudnessMeter lm; lm.prepare (48000.0, 2);
+            AudioBuffer<float> tail (out.getArrayOfWritePointers(), 2, 48000 * 6, 48000 * 6);
+            lm.process (tail);
+            return std::make_pair (lm.integrated.load(), sn::gainToDb (tail.getMagnitude (0, 0, tail.getNumSamples())));
+        };
+        const auto loud = streamed (0.7f, false), quiet = streamed (0.02f, true);
+        check (std::abs (loud.first + 14.0f) < 1.0f && quiet.first < -14.5f && quiet.second <= -0.9f,
+               "Stream: loud master -> " + String (loud.first, 1) + " LUFS; quiet master lifted only to peak " + String (quiet.second, 1) + " dB (" + String (quiet.first, 1) + " LUFS)");
+    }
+
+    // Альбом: збереження, порівняння, поради
+    {
+        Album::dirOverride() = File::getSpecialLocation (File::tempDirectory).getChildFile ("sn_album_test");
+        Album::dirOverride().deleteRecursively();
+        Album a; a.name = "Test Record";
+        AlbumSong s1 { "One", -9.0f, -1.0f, {} }, s2 { "Two", -9.4f, -1.2f, {} }, s3 { "Three", -11.5f, -1.0f, {} };
+        for (int b = 0; b < an::kBands; ++b) s3.tone[(size_t) b] = an::bandHz[(size_t) b] < 160.0f ? 3.0f : 0.0f;    // важчий низ
+        a.put (s1); a.put (s2); a.put (s3);
+        a.save();
+        Album b; b.load ("Test Record");
+        const auto d = b.compare (s3);
+        const auto tips = Album::advice (d);
+        check (b.songs.size() == 3 && std::abs (d.lufs + 2.3f) < 0.2f && d.lows > 2.5f && tips.size() >= 2,
+               "Album: saved/loaded, song 3 is " + String (d.lufs, 1) + " LU and lows +" + String (d.lows, 1) + " dB vs others; tips: " + tips.joinIntoString (" | "));
+        Album::dirOverride().deleteRecursively();
+    }
+
     // Знімок інтерфейсу (потрібен X-сервер)
     if (argc > 1)
     {
@@ -454,6 +501,22 @@ int main (int argc, char* argv[])
         FileOutputStream os (f);
         PNGImageFormat().writeImageToStream (img, os);
         std::cout << "Snapshot: " << f.getFullPathName() << std::endl;
+
+        // Альбом
+        Album::dirOverride() = File::getSpecialLocation (File::tempDirectory).getChildFile ("sn_album_snap");
+        Album::dirOverride().deleteRecursively();
+        Album a; a.name = "Desert Sessions";
+        AlbumSong s1 { "Sandstorm", -9.0f, -1.0f, {} }, s2 { "Mirage", -9.6f, -1.3f, {} };
+        s2.tone[2] = 2.0f;
+        a.put (s1); a.put (s2); a.save();
+        p.apvts.state.setProperty ("album", "Desert Sessions", nullptr);
+        p.apvts.state.setProperty ("albumSong", "Dune Rider", nullptr);
+        for (int i = 0; i < 200; ++i) p.analysis.tick();
+        AlbumView av (p);
+        auto aimg = av.createComponentSnapshot (av.getLocalBounds(), true, 1.5f);
+        FileOutputStream aos (f.getSiblingFile ("album.png")); aos.setPosition (0); aos.truncate();
+        PNGImageFormat().writeImageToStream (aimg, aos);
+        Album::dirOverride().deleteRecursively();
     }
 
     std::cout << (failures == 0 ? "ALL PASSED" : String (failures) + " FAILED") << std::endl;

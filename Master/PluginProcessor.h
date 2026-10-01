@@ -60,6 +60,7 @@ public:
     const RefTrack* reference() const noexcept { return ref.get(); }    // лише message thread
     bool isLoadingReference() const noexcept { return refLoading.load(); }
     juce::String refError;
+    std::atomic<float> streamGainDb { 0.0f };   // скільки стрімінг змінить гучність (для інтерфейсу)
     mix::MixWatch mixWatch;          // поради зі зведення від SN Listen на доріжках
     std::function<void()> onReferenceChanged;
 
@@ -114,7 +115,7 @@ private:
     juce::ThreadPool pool { 1 };
     std::atomic<bool> refLoading { false };
     std::shared_ptr<bool> alive = std::make_shared<bool> (true);
-    float refMix = 0.0f, refGainSm = 1.0f;
+    float refMix = 0.0f, refGainSm = 1.0f, streamGainSm = 1.0f;
     juce::int64 hostPos = 0; bool hostPlaying = false;
     struct Monitor
     {
