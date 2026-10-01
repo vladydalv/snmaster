@@ -82,7 +82,75 @@ void InstPicker::mouseMove (const MouseEvent& e)
 void InstPicker::mouseExit (const MouseEvent&) { hover = -1; repaint(); }
 
 //==============================================================================
-ListenContent::ListenContent (SpacenerdListenProcessor& p) : proc (p), picker (p)
+FixStrip::FixStrip (SpacenerdListenProcessor& p)
+    : proc (p), onButton (p.apvts, ListenIDs::fixOn, "FIXES ON", Theme::accent)
+{
+    onButton.setTooltip ("Switch all applied fixes on/off to compare before and after");
+    addAndMakeVisible (onButton);
+}
+
+void FixStrip::update()
+{
+    auto now = proc.appliedFixes();
+    bool same = now.size() == fixes.size();
+    for (size_t i = 0; same && i < now.size(); ++i)
+        same = now[i].type == fixes[i].type && now[i].hz == fixes[i].hz && now[i].db == fixes[i].db;
+    if (same) return;
+    fixes = std::move (now);
+    resized();
+    repaint();
+}
+
+void FixStrip::resized()
+{
+    onButton.setBounds (getWidth() - 90, 0, 90, 22);
+    chips.clear(); crosses.clear();
+    Font font (FontOptions (11.5f, Font::bold));
+    float x = 0.0f, y = 28.0f;
+    for (const auto& f : fixes)
+    {
+        const float w = GlyphArrangement::getStringWidth (font, mix::fixLabel (f)) + 40.0f;
+        if (x + w > (float) getWidth()) { x = 0.0f; y += 28.0f; }
+        chips.push_back ({ x, y, w, 22.0f });
+        crosses.push_back ({ x + w - 22.0f, y, 22.0f, 22.0f });
+        x += w + 6.0f;
+    }
+}
+
+void FixStrip::paint (Graphics& g)
+{
+    g.setColour (Theme::muted);
+    g.setFont (FontOptions (11.0f, Font::bold));
+    g.drawText (fixes.empty() ? String ("APPLIED FIXES: none yet - press FIX on a tip") : String ("APPLIED FIXES"),
+                0, 0, getWidth() - 100, 22, Justification::centredLeft);
+    const bool on = proc.apvts.getRawParameterValue (ListenIDs::fixOn)->load() > 0.5f;
+    for (size_t i = 0; i < fixes.size(); ++i)
+    {
+        const auto c = chips[i];
+        g.setColour (Theme::accent.withAlpha (on ? 0.2f : 0.07f));
+        g.fillRoundedRectangle (c, 11.0f);
+        g.setColour (Theme::accent.withAlpha (on ? 0.9f : 0.35f));
+        g.drawRoundedRectangle (c.reduced (0.5f), 11.0f, 1.0f);
+        g.setColour (on ? Theme::text : Theme::muted);
+        g.setFont (FontOptions (11.5f, Font::bold));
+        g.drawText (mix::fixLabel (fixes[i]), c.withTrimmedLeft (10.0f).withTrimmedRight (22.0f), Justification::centredLeft);
+        const auto x = crosses[i].reduced (7.0f);
+        g.setColour (crosses[i].contains (hover) ? Theme::hot : Theme::muted);
+        g.drawLine (x.getX(), x.getY(), x.getRight(), x.getBottom(), 1.5f);
+        g.drawLine (x.getRight(), x.getY(), x.getX(), x.getBottom(), 1.5f);
+    }
+}
+
+void FixStrip::mouseDown (const MouseEvent& e)
+{
+    for (size_t i = 0; i < crosses.size(); ++i)
+        if (crosses[i].contains (e.position)) { proc.removeFix ((int) i); update(); return; }
+}
+
+void FixStrip::mouseMove (const MouseEvent& e) { hover = e.position; repaint(); }
+
+//==============================================================================
+ListenContent::ListenContent (SpacenerdListenProcessor& p) : proc (p), picker (p), fixStrip (p)
 {
     nameLabel.setEditable (false, true, false);
     nameLabel.setJustificationType (Justification::centred);
@@ -95,11 +163,13 @@ ListenContent::ListenContent (SpacenerdListenProcessor& p) : proc (p), picker (p
     resetButton.setTooltip ("Forget what was heard and listen again (RESET in SN Master resets all tracks)");
     resetButton.onClick = [this] { proc.resetStats(); };
 
+    advice.onFix = [this] (const mix::Fix& f) { proc.applyFix (f); fixStrip.update(); };
+    advice.isApplied = [this] (const mix::Fix& f) { return proc.hasFix (f); };
     adviceView.setViewedComponent (&advice, false);
     adviceView.setScrollBarsShown (true, false);
     adviceView.setScrollBarThickness (6);
 
-    for (auto* c : std::initializer_list<Component*> { &picker, &nameLabel, &resetButton, &adviceView })
+    for (auto* c : std::initializer_list<Component*> { &picker, &nameLabel, &resetButton, &adviceView, &fixStrip })
         addAndMakeVisible (c);
 }
 
@@ -111,6 +181,7 @@ void ListenContent::tick()
     if (! nameLabel.isBeingEdited() && nameLabel.getText() != proc.displayName())
         nameLabel.setText (proc.displayName(), dontSendNotification);
     advice.set (proc.verdict);
+    fixStrip.update();
     const int w = adviceView.getWidth() - 10;
     advice.setSize (w, advice.preferredHeight (w));
     repaint (statusArea);
@@ -178,7 +249,10 @@ void ListenContent::paint (Graphics& g)
     line ("Heard", String ((int) f.seconds / 60) + ":" + String ((int) f.seconds % 60).paddedLeft ('0', 2));
 
     // Права картка: поради
-    drawCard (g, adviceView.getBounds().toFloat().withTrimmedTop (-44.0f).expanded (14.0f, 0.0f).withTrimmedBottom (-14.0f), "WHAT TO DO");
+    const auto card = adviceView.getBounds().getUnion (fixStrip.getBounds()).toFloat().withTrimmedTop (-44.0f).expanded (14.0f, 0.0f).withTrimmedBottom (-14.0f);
+    drawCard (g, card, "WHAT TO DO");
+    g.setColour (Theme::border);
+    g.fillRect (card.getX() + 12.0f, (float) fixStrip.getY() - 8.0f, card.getWidth() - 24.0f, 1.0f);
 }
 
 void ListenContent::resized()
@@ -189,7 +263,9 @@ void ListenContent::resized()
     footerArea = statusArea;
     nameLabel.setBounds (statusArea.getX() + 10, statusArea.getY() + 152, statusArea.getWidth() - 20, 26);
     resetButton.setBounds (statusArea.getRight() - 72, statusArea.getY() + 8, 60, 22);
-    adviceView.setBounds (statusArea.getRight() + 26, top + 44, getWidth() - statusArea.getRight() - 26 - 30, getHeight() - top - 44 - 30);
+    const int x = statusArea.getRight() + 26, w = getWidth() - statusArea.getRight() - 26 - 30;
+    fixStrip.setBounds (x, getHeight() - 30 - 78, w, 78);
+    adviceView.setBounds (x, top + 44, w, fixStrip.getY() - 16 - (top + 44));
 }
 
 //==============================================================================

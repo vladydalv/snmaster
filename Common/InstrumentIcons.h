@@ -145,6 +145,11 @@ inline juce::String verdictText (const mix::Verdict& v)
 class AdviceList final : public juce::Component
 {
 public:
+    /** Кнопка FIX біля поради (якщо задано): застосувати виправлення. */
+    std::function<void (const mix::Fix&)> onFix;
+    /** Чи вже застосовано (тоді кнопка — MORE: підсилити). */
+    std::function<bool (const mix::Fix&)> isApplied;
+
     void set (const mix::Verdict& v)
     {
         if (std::memcmp (&v, &shown, sizeof (mix::Verdict)) == 0) return;
@@ -154,7 +159,7 @@ public:
 
     int preferredHeight (int width) const
     {
-        int h = 0;
+        int h = 2;
         for (int i = 0; i < shown.numItems; ++i) h += itemHeight (i, width) + 10;
         return std::max (h, 40);
     }
@@ -162,8 +167,9 @@ public:
     void paint (juce::Graphics& g) override
     {
         using namespace juce;
-        float y = 0.0f;
+        float y = 2.0f;
         const float w = (float) getWidth();
+        for (auto& r : buttons) r = {};
         if (shown.numItems == 0)
         {
             g.setColour (Theme::good);
@@ -177,16 +183,52 @@ public:
             const int h = itemHeight (i, getWidth());
             g.setColour (it.sev >= 2 ? Theme::hot : it.sev == 1 ? Theme::warn : Theme::accent2);
             g.fillEllipse (2.0f, y + 5.0f, 8.0f, 8.0f);
+
+            float titleW = w - 18.0f;
+            if (onFix && it.fix.valid())
+            {
+                // Пігулка FIX / MORE і що саме вона зробить
+                const bool applied = isApplied && isApplied (it.fix);
+                const Rectangle<float> pill (w - 64.0f, y - 1.0f, 62.0f, 20.0f);
+                buttons[(size_t) i] = pill;
+                const bool over = pill.contains (hover);
+                g.setColour ((applied ? Theme::accent2 : Theme::accent).withAlpha (over ? 0.45f : 0.22f));
+                g.fillRoundedRectangle (pill, 10.0f);
+                g.setColour (applied ? Theme::accent2 : Theme::accent);
+                g.drawRoundedRectangle (pill.reduced (0.5f), 10.0f, 1.0f);
+                g.setColour (Theme::text);
+                g.setFont (FontOptions (10.5f, Font::bold));
+                g.drawText (applied ? "MORE" : "FIX", pill, Justification::centred);
+                titleW -= 70.0f;
+            }
             g.setColour (Theme::text);
             g.setFont (FontOptions (13.5f, Font::bold));
-            g.drawText (String::fromUTF8 (it.title), Rectangle<float> (18.0f, y, w - 18.0f, 18.0f), Justification::centredLeft, true);
+            g.drawText (String::fromUTF8 (it.title), Rectangle<float> (18.0f, y, titleW, 18.0f), Justification::centredLeft, true);
             AttributedString a;
             a.append (String::fromUTF8 (it.text), FontOptions (12.5f), Theme::muted);
+            if (onFix && it.fix.valid())
+                a.append ("\nFIX: " + mix::fixLabel (it.fix), FontOptions (11.5f, Font::bold), Theme::accent.brighter (0.3f));
             a.setWordWrap (AttributedString::byWord);
             TextLayout tl; tl.createLayout (a, w - 18.0f);
             tl.draw (g, Rectangle<float> (18.0f, y + 20.0f, w - 18.0f, (float) h - 20.0f));
             y += (float) h + 10.0f;
         }
+    }
+
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        hover = e.position;
+        bool over = false;
+        for (auto& r : buttons) over = over || r.contains (hover);
+        setMouseCursor (over ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+        repaint();
+    }
+    void mouseExit (const juce::MouseEvent&) override { hover = { -100.0f, -100.0f }; repaint(); }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        for (int i = 0; i < shown.numItems; ++i)
+            if (buttons[(size_t) i].contains (e.position) && onFix) { onFix (shown.items[i].fix); repaint(); return; }
     }
 
 private:
@@ -195,11 +237,14 @@ private:
         using namespace juce;
         AttributedString a;
         a.append (String::fromUTF8 (shown.items[i].text), FontOptions (12.5f), Theme::muted);
+        if (onFix && shown.items[i].fix.valid()) a.append ("\nFIX: " + mix::fixLabel (shown.items[i].fix), FontOptions (11.5f, Font::bold), Theme::accent);
         a.setWordWrap (AttributedString::byWord);
         TextLayout tl; tl.createLayout (a, (float) width - 18.0f);
         return 20 + (int) std::ceil (tl.getHeight());
     }
 
     mix::Verdict shown;
+    std::array<juce::Rectangle<float>, mix::Verdict::kItems> buttons {};
+    juce::Point<float> hover { -100.0f, -100.0f };
 };
 } // namespace snui

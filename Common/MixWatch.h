@@ -67,6 +67,7 @@ public:
         Verdict v;
         float faderDb = 0.0f;
         bool faderKnown = false;
+        std::vector<Fix> fixes;          // що вже застосовано на доріжці
     };
 
     MasterFrames frames;
@@ -85,6 +86,8 @@ public:
     }
 
     void requestReset() { resetPending = true; }
+    /** Кнопка FIX у Master: доріжка (SN Listen) застосує виправлення сама. */
+    void requestFix (int slot, const Fix& f) { bus.requestFix (slot, f); force = true; }
     void refreshNow() { force = true; }
 
     std::vector<TrackView> tracks;      // для інтерфейсу (message thread)
@@ -130,6 +133,7 @@ private:
             v.v = makeVerdict (t.adv, t.f.valid != 0);
             v.faderDb = (float) (10.0 * std::log10 (std::max (t.g, 1.0e-9)));
             v.faderKnown = t.gKnown;
+            for (int k = 0; k < t.f.numFixes; ++k) v.fixes.push_back (t.f.fixes[k]);
             v.v.faderDb = v.faderDb;
             bus.writeVerdict (t.slot, v.v);
             tracks.push_back (v);
@@ -162,10 +166,12 @@ private:
         std::vector<std::array<double, kGroups>> m;
         std::vector<int64_t> rowIdx, rowMs;
         const auto* L = bus.layout();
+        int64_t sinceFix = 0;                    // після FIX на будь-якій доріжці — лише свіжі дані
+        for (auto& t : ts) sinceFix = std::max (sinceFix, t.f.fixMs);
         for (auto& rec : frames.ring)
         {
             const auto idx = rec.idx.load (std::memory_order_acquire);
-            if (idx < 0 || now - rec.ms > 125000) continue;
+            if (idx < 0 || now - rec.ms > 125000 || rec.ms < sinceFix) continue;
             std::array<double, kGroups> v {};
             for (int k = 0; k < kGroups; ++k) v[(size_t) k] = rec.p[k];
             m.push_back (v); rowIdx.push_back (idx); rowMs.push_back (rec.ms);
@@ -286,8 +292,9 @@ private:
                                    : c == Drums ? juce::String (hasKS ? "Overheads / room" : "Drums") : juce::String (instName (c));
             const juce::String text = who + (members.size() > 1 ? " are ~" : " is ~") + dbText (d) + (d > 0 ? " louder" : " quieter") + " than usual for " + genreLabel (genre)
                                     + ". " + (d > 0 ? "Lower" : "Raise") + " by about " + dbText (d * 0.8f) + " (fader or bus).";
-            const Advice a { sev, who + (d > 0 ? " too loud" : " too quiet"), text };
+            Advice a { sev, who + (d > 0 ? " too loud" : " too quiet"), text };
             mixAdv.push_back (a);
+            a.fix = { FixGain, 0.0f, juce::jlimit (-12.0f, 12.0f, std::round (-d * 0.8f * 2.0f) * 0.5f), 0.707f };   // кожна доріжка групи — на стільки ж
             for (auto* t : members) t->adv.push_back (a);
         }
     }
@@ -336,7 +343,13 @@ private:
             const Advice adv { 1, A + " vs " + B + " at " + hzText (bestHz),
                                A + " and " + B.toLowerCase() + " fight for " + hzText (bestHz) + ". " + juce::String (c.fix).replace ("%f", hzText (bestHz)) };
             mixAdv.push_back (adv);
-            for (auto& t : ts) if (t.f.inst == c.a || t.f.inst == c.b) t.adv.push_back (adv);
+            for (auto& t : ts)
+                if (t.f.inst == c.a || t.f.inst == c.b)
+                {
+                    auto own = adv;
+                    if (t.f.inst == c.cut) own.fix = { FixPeak, bestHz, -2.5f, 1.4f };
+                    t.adv.push_back (own);
+                }
         }
     }
 

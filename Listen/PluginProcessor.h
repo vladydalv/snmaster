@@ -4,6 +4,7 @@
 #include "Parameters.h"
 #include "../Common/ListenAnalysis.h"
 #include "../Common/MixAdvisor.h"
+#include "../Common/FixChain.h"
 
 /** SN Listen: ставиться на доріжку, звук не змінює. Слухає інструмент і передає підсумок у SN Master. */
 class SpacenerdListenProcessor final : public juce::AudioProcessor, private juce::Timer
@@ -41,6 +42,14 @@ public:
     void update();
     void resetStats();
 
+    /** FIX: застосувати пораду (повторний FIX того самого — підсилює, а не дублює). */
+    void applyFix (const mix::Fix&);
+    void removeFix (int index);
+    void clearFixes();
+    std::vector<mix::Fix> appliedFixes() const;
+    /** Чи вже застосовано таке виправлення. */
+    bool hasFix (const mix::Fix&) const;
+
     juce::String displayName() const;
     void setUserName (const juce::String&);
 
@@ -54,6 +63,13 @@ public:
 private:
     void timerCallback() override { update(); }
 
+    void pushFixes();
+    juce::ValueTree fixTree();
+
+    mix::FixChain fixChain;
+    uint32_t seenFixReq = 0, nextFixId = 1;
+    int64_t lastFixMs = 0;
+    bool lastFixOn = true;
     mix::FrameMaker maker;
     mix::ListenStats stats;
     sn::LoudnessMeter loudness;

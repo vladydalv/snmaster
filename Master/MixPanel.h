@@ -23,7 +23,7 @@ private:
         void mouseExit (const juce::MouseEvent&) override  { repaint(); }
         MixPanel& owner;
         juce::String name;
-        int inst = mix::Other;
+        int inst = mix::Other, slot = -1;
         bool overall = false;
         mix::Verdict v;
         juce::String sub;

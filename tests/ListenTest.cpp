@@ -350,6 +350,7 @@ int main (int argc, char* argv[])
         {
             const File dir (argv[1]);
             {
+                lg.applyFix ({ mix::FixLowPass, 9000.0f, 0.0f, 0.707f });     // для знімка: одна «таблетка»
                 SpacenerdListenEditor ed (lg);
                 ed.setSize (SpacenerdListenEditor::baseW, SpacenerdListenEditor::baseH);
                 auto img = ed.createComponentSnapshot (ed.getLocalBounds(), true, 1.5f);
@@ -363,6 +364,76 @@ int main (int argc, char* argv[])
                 PNGImageFormat().writeImageToStream (img, os);
             }
             std::cout << "Snapshots written" << std::endl;
+        }
+    }
+
+    // 4. FIX: виправлення звучать як заявлено, повторний FIX підсилює, стан зберігається
+    {
+        Head head; head.playing = false;
+        auto tone = [] (double hz, bool antiphase = false)
+        {
+            AudioBuffer<float> b (2, (int) fs);
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                const float v = 0.25f * (float) std::sin (twoPi * hz * i / fs);
+                b.setSample (0, i, v); b.setSample (1, i, antiphase ? -v : v);
+            }
+            return b;
+        };
+        auto gainThrough = [&] (SpacenerdListenProcessor& p, const AudioBuffer<float>& in)
+        {
+            AudioBuffer<float> out (in);
+            MidiBuffer midi;
+            for (int pos = 0; pos < out.getNumSamples(); pos += 480)
+            {
+                AudioBuffer<float> b (out.getArrayOfWritePointers(), 2, pos, std::min (480, out.getNumSamples() - pos));
+                p.processBlock (b, midi);
+            }
+            const int from = out.getNumSamples() / 2;
+            return sn::gainToDb (out.getRMSLevel (0, from, out.getNumSamples() - from) / in.getRMSLevel (0, from, in.getNumSamples() - from));
+        };
+        auto fresh = [&] (std::initializer_list<mix::Fix> fx)
+        {
+            auto p = std::make_unique<SpacenerdListenProcessor>();
+            p->setPlayHead (&head); p->setRateAndBufferSizeDetails (fs, 480); p->prepareToPlay (fs, 480);
+            for (auto& f : fx) p->applyFix (f);
+            return p;
+        };
+        {
+            auto p = fresh ({ { mix::FixPeak, 300.0f, -3.0f, 1.4f } });
+            const float once = gainThrough (*p, tone (300.0));
+            p->applyFix ({ mix::FixPeak, 310.0f, -3.0f, 1.4f });
+            const float twice = gainThrough (*p, tone (300.0));
+            check (std::abs (once + 3.0f) < 0.3f && std::abs (twice + 6.0f) < 0.3f && p->appliedFixes().size() == 1,
+                   "FIX peak -3 dB @ 300 Hz: " + String (once, 2) + " dB; again (MORE): " + String (twice, 2) + " dB, one entry");
+        }
+        {
+            auto p = fresh ({ { mix::FixHighPass, 80.0f, 0, 0.707f }, { mix::FixGain, 0, 6.0f, 0.707f } });
+            const float lo = gainThrough (*p, tone (40.0)), mid = gainThrough (*p, tone (1000.0));
+            check (lo < -6.0f && std::abs (mid - 6.0f) < 0.3f, "FIX high-pass 80 Hz: 40 Hz " + String (lo, 1) + " dB; level +6: " + String (mid, 2) + " dB");
+            p->apvts.getParameter (ListenIDs::fixOn)->setValueNotifyingHost (0.0f);
+            p->update();
+            const float off = gainThrough (*p, tone (1000.0));
+            check (std::abs (off) < 0.1f, "FIXES ON off = bypass: " + String (off, 2) + " dB");
+
+            juce::MemoryBlock mb; p->getStateInformation (mb);
+            SpacenerdListenProcessor q; q.setStateInformation (mb.getData(), (int) mb.getSize());
+            check (q.appliedFixes().size() == 2, "fixes saved with the project");
+        }
+        {
+            auto p = fresh ({ { mix::FixHum, 50.0f, 0, 0.707f }, { mix::FixMonoLow, 120.0f, 0, 0.707f } });
+            const float hum = gainThrough (*p, tone (50.0)), wide = gainThrough (*p, tone (60.0, true)), keep = gainThrough (*p, tone (440.0));
+            check (hum < -15.0f && wide < -15.0f && std::abs (keep) < 0.5f,
+                   "FIX hum notch 50 Hz: " + String (hum, 1) + " dB; mono low (antiphase 60 Hz): " + String (wide, 1) + " dB; 440 Hz untouched " + String (keep, 2));
+        }
+        {
+            // FIX, натиснутий у Master, доходить до доріжки
+            auto p = fresh ({});
+            SpacenerdMasterProcessor m;
+            m.mixWatch.tick (1); m.mixWatch.refreshNow(); m.mixWatch.tick (1);
+            m.mixWatch.requestFix (p->slotIndex(), { mix::FixPeak, 2500.0f, -2.0f, 1.6f });
+            p->update();
+            check (p->appliedFixes().size() == 1 && p->appliedFixes()[0].hz == 2500.0f, "FIX pressed in Master is applied by the track");
         }
     }
 

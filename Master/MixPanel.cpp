@@ -6,12 +6,25 @@ using namespace snui;
 namespace
 {
 /** Вміст спливаючого вікна з порадами. */
-class DetailsView final : public Component
+class DetailsView final : public Component, private Timer
 {
 public:
-    DetailsView (const String& t, const String& s, int inst, bool overall, const mix::Verdict& v)
-        : title (t), sub (s), instrument (inst), isOverall (overall), status (v.status)
+    DetailsView (SpacenerdMasterProcessor& p, int slotIndex, const String& t, const String& s, int inst, bool overall, const mix::Verdict& v)
+        : proc (p), slot (slotIndex), title (t), sub (s), instrument (inst), isOverall (overall), status (v.status)
     {
+        if (! overall && slot >= 0)
+        {
+            // FIX прямо з Master: доріжка (SN Listen) застосує сама
+            list.onFix = [this] (const mix::Fix& f) { proc.mixWatch.requestFix (slot, f); pendingFix = f; startTimerHz (4); };
+            list.isApplied = [this] (const mix::Fix& f)
+            {
+                if (pendingFix.valid() && mix::sameFix (pendingFix, f)) return true;
+                for (const auto& tr : proc.mixWatch.tracks)
+                    if (tr.slot == slot)
+                        for (const auto& a : tr.fixes) if (mix::sameFix (a, f)) return true;
+                return false;
+            };
+        }
         list.set (v);
         addAndMakeVisible (list);
         const int w = 420;
@@ -42,6 +55,10 @@ public:
     }
 
 private:
+    void timerCallback() override { list.repaint(); }
+    SpacenerdMasterProcessor& proc;
+    int slot;
+    mix::Fix pendingFix;
     String title, sub;
     int instrument;
     bool isOverall;
@@ -133,6 +150,7 @@ void MixPanel::tick()
         const auto& t = w.tracks[i];
         c.name = t.name.isNotEmpty() ? t.name : String (mix::instName (t.inst));
         c.inst = t.inst;
+        c.slot = t.slot;
         c.v = t.v;
         c.sub = subFor (t.v);
         c.setTooltip (c.name + " (" + mix::instName (t.inst) + ")\n\n" + verdictText (t.v));
@@ -152,7 +170,7 @@ void MixPanel::layoutCards()
 
 void MixPanel::showDetails (Card& c)
 {
-    auto view = std::make_unique<DetailsView> (c.overall ? String ("Whole mix") : c.name, c.overall ? c.sub : String (mix::instName (c.inst)) + "  -  " + c.sub,
+    auto view = std::make_unique<DetailsView> (proc, c.overall ? -1 : c.slot, c.overall ? String ("Whole mix") : c.name, c.overall ? c.sub : String (mix::instName (c.inst)) + "  -  " + c.sub,
                                                c.inst, c.overall, c.v);
     auto* top = getTopLevelComponent();
     CallOutBox::launchAsynchronously (std::move (view), top->getLocalArea (&c, c.getLocalBounds()), top);

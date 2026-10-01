@@ -23,6 +23,25 @@ private:
     int selected = 0, hover = -1, guess = -1;
 };
 
+/** Застосовані виправлення: «таблетки» з × (прибрати) і перемикач усіх FIX (порівняти до/після). */
+class FixStrip final : public juce::Component
+{
+public:
+    explicit FixStrip (SpacenerdListenProcessor&);
+    void update();
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+
+private:
+    SpacenerdListenProcessor& proc;
+    snui::PillToggle onButton;
+    std::vector<mix::Fix> fixes;
+    std::vector<juce::Rectangle<float>> chips, crosses;
+    juce::Point<float> hover;
+};
+
 class ListenContent final : public juce::Component
 {
 public:
@@ -38,6 +57,7 @@ private:
     juce::TextButton resetButton { "RESET" };
     juce::Viewport adviceView;
     snui::AdviceList advice;
+    FixStrip fixStrip;
     juce::Rectangle<int> statusArea, footerArea;
     float level = 0.0f;
     int shownStatus = -2, shownInst = -1;
@@ -51,7 +71,7 @@ public:
     void paint (juce::Graphics& g) override { g.fillAll (Theme::bg); }
     void resized() override;
 
-    static constexpr int baseW = 720, baseH = 470;
+    static constexpr int baseW = 720, baseH = 540;
 
 private:
     void timerCallback() override { content.tick(); }

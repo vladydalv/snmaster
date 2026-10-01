@@ -19,6 +19,46 @@ inline const char* instName (int i)
     return i >= 0 && i < kNumInst ? n[i] : "Other";
 }
 
+/** Виправлення, яке SN Listen може застосувати сам (кнопка FIX). */
+enum FixType : int32_t { FixNone = 0, FixGain, FixPeak, FixHighPass, FixLowPass, FixHighShelf, FixLowShelf, FixHum, FixMonoLow };
+struct Fix
+{
+    int32_t type = FixNone;
+    float hz = 0.0f, db = 0.0f, q = 0.707f;
+    bool valid() const noexcept { return type != FixNone; }
+};
+
+/** Те саме виправлення (для повторного FIX — підсилити, а не дублювати). */
+inline bool sameFix (const Fix& a, const Fix& b)
+{
+    if (a.type != b.type || a.type == FixNone) return false;
+    if (a.type == FixGain || a.type == FixHighPass || a.type == FixLowPass || a.type == FixHum || a.type == FixMonoLow) return true;
+    return std::abs (std::log2 (std::max (a.hz, 1.0f) / std::max (b.hz, 1.0f))) < 0.34f;
+}
+
+inline juce::String fixLabel (const Fix& f)
+{
+    auto hz = [] (float v)
+    {
+        if (v < 1000.0f) return juce::String (juce::roundToInt (v)) + " Hz";
+        const float k = v / 1000.0f;
+        return (std::abs (k - std::round (k)) < 0.05f ? juce::String (juce::roundToInt (k)) : juce::String (k, 1)) + " kHz";
+    };
+    auto db = [] (float v) { return (v > 0 ? "+" : "") + juce::String (v, 1) + " dB"; };
+    switch (f.type)
+    {
+        case FixGain:      return "Level " + db (f.db);
+        case FixPeak:      return db (f.db) + " @ " + hz (f.hz);
+        case FixHighPass:  return "High-pass " + hz (f.hz);
+        case FixLowPass:   return "Low-pass " + hz (f.hz);
+        case FixHighShelf: return "Highs " + db (f.db) + " above " + hz (f.hz);
+        case FixLowShelf:  return "Lows " + db (f.db) + " below " + hz (f.hz);
+        case FixHum:       return "Hum notches " + hz (f.hz);
+        case FixMonoLow:   return "Mono below " + hz (f.hz);
+        default:           return {};
+    }
+}
+
 /** Підсумок доріжки, який рахує SN Listen. */
 struct Features
 {
@@ -46,6 +86,10 @@ struct Features
     // Уся установка на одній доріжці: рівні ударів бочки й малого та тарілок (зважено, дБ)
     float kitKickDb = -100.0f, kitSnareDb = -100.0f, kitCymDb = -100.0f;
     int32_t kitKickHits = 0, kitSnareHits = 0;
+    int64_t fixMs = 0;             // коли востаннє застосовано FIX (Master не змішує дані до і після)
+    static constexpr int kMaxFixes = 10;
+    int32_t numFixes = 0;
+    Fix fixes[kMaxFixes];          // що вже застосовано
     float bands[an::kBands] {};    // середній спектр, коли доріжка звучить (дБ)
 };
 
@@ -53,7 +97,7 @@ struct Features
 struct Verdict
 {
     static constexpr int kItems = 6;
-    struct Item { int32_t sev = 0; char title[48] {}; char text[232] {}; };
+    struct Item { int32_t sev = 0; char title[48] {}; char text[232] {}; Fix fix; };
     int32_t status = -1;           // -1 збір даних, 0 ок, 1 увага, 2 проблема
     int32_t numItems = 0;
     float faderDb = 0.0f;          // оцінка фейдера/посилів (наскільки доріжка тихша в міксі, ніж на вставці)
@@ -67,7 +111,7 @@ inline int groupOfBand (int b) { return b <= 6 ? 0 : b <= 12 ? 1 : b <= 19 ? 2 :
 struct FrameRec { std::atomic<int64_t> idx; float p[kGroups]; int64_t ms; };
 
 static constexpr int kSlots = 32, kFrames = 1200;   // 1200 кадрів × 100 мс = 2 хв історії для оцінки фейдерів
-static constexpr uint32_t kMagic = 0x534e4d42, kVersion = 3;
+static constexpr uint32_t kMagic = 0x534e4d42, kVersion = 4;
 
 struct Slot
 {
@@ -80,6 +124,8 @@ struct Slot
     std::atomic<uint32_t> vseq;
     std::atomic<int64_t> verdictMs;
     Verdict v;
+    std::atomic<uint32_t> fixReqSeq;   // FIX, натиснутий у Master: Listen забирає і застосовує
+    Fix fixReq;
 };
 
 struct Header
@@ -108,7 +154,7 @@ public:
 #if JUCE_MAC
                    .getChildFile ("Application Support")
 #endif
-                   .getChildFile ("Spacenerd").getChildFile ("MixBus-v3.bin");
+                   .getChildFile ("Spacenerd").getChildFile ("MixBus-v4.bin");
     }
 
     bool open()
@@ -246,14 +292,37 @@ public:
         return false;
     }
 
+    /** Master просить доріжку застосувати виправлення. */
+    void requestFix (int slot, const Fix& f)
+    {
+        if (mem == nullptr || slot < 0) return;
+        auto& s = mem->slots[slot];
+        s.fixReq = f;
+        std::atomic_thread_fence (std::memory_order_release);
+        s.fixReqSeq.fetch_add (1, std::memory_order_acq_rel);
+    }
+
+    /** Для Listen: нове прохання від Master? */
+    bool takeFixRequest (int slot, uint32_t& seen, Fix& f) const
+    {
+        if (mem == nullptr || slot < 0) return false;
+        auto& s = mem->slots[slot];
+        const auto n = s.fixReqSeq.load (std::memory_order_acquire);
+        if (n == seen) return false;
+        seen = n;
+        f = s.fixReq;
+        return f.valid();
+    }
+
 private:
     std::unique_ptr<juce::MemoryMappedFile> mapped;
     Layout* mem = nullptr;
 };
 
-inline void setItem (Verdict::Item& it, int sev, const juce::String& title, const juce::String& text)
+inline void setItem (Verdict::Item& it, int sev, const juce::String& title, const juce::String& text, Fix fix = {})
 {
     it.sev = sev;
+    it.fix = fix;
     std::memset (it.title, 0, sizeof (it.title));
     std::memset (it.text, 0, sizeof (it.text));
     title.copyToUTF8 (it.title, sizeof (it.title) - 1);

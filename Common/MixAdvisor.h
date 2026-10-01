@@ -7,7 +7,7 @@
     Пороги — узагальнені практики зведення року, відправна точка, а не закон. */
 namespace mix
 {
-struct Advice { int sev; juce::String title, text; };
+struct Advice { int sev; juce::String title, text; Fix fix {}; };
 
 inline juce::String hzText (float hz) { return hz >= 1000.0f ? (hz >= 10000.0f ? juce::String (juce::roundToInt (hz / 1000.0f)) : juce::String (hz / 1000.0f, 1)) + " kHz" : juce::String (juce::roundToInt (hz)) + " Hz"; }
 inline juce::String dbText (float db) { return juce::String (juce::roundToInt (std::abs (db))) + " dB"; }
@@ -61,7 +61,7 @@ inline void trackChecks (const Features& f, std::vector<Advice>& out, int genre 
         out.push_back ({ f.hum >= 0.75f ? 2 : 1, "Mains hum " + juce::String (h) + " Hz",
                          "Steady " + juce::String (h) + " Hz hum in the quiet parts. Check grounding, try another outlet, move away from the computer screen "
                          "(single-coil pickups catch it most). In the mix: narrow cuts at " + juce::String (h) + "/" + juce::String (2 * h) + "/"
-                         + juce::String (3 * h) + " Hz or a gate." });
+                         + juce::String (3 * h) + " Hz or a gate.", { FixHum, (float) h, 0.0f, 0.707f } });
     }
     if ((inst == Guitar || inst == Bass || inst == Keys) && f.tuneFrames >= 40.0f && std::abs (f.tuneCents) >= 12.0f)
         out.push_back ({ std::abs (f.tuneCents) >= 20.0f ? 2 : 1, "Tuning",
@@ -76,41 +76,41 @@ inline void trackChecks (const Features& f, std::vector<Advice>& out, int genre 
     const int hp = inst == Vocal ? 100 : inst == Guitar ? 80 : inst == Snare ? 80 : inst == Keys ? 60 : 0;
     if (hp > 0 && sub - mid > -14.0f)
         out.push_back ({ 1, "Rumble below 60 Hz", "Energy under 60 Hz that a " + nm.toLowerCase() + " doesn't need: it eats headroom and muddies the bass. "
-                                                   "High-pass around " + juce::String (hp) + " Hz." });
+                                                   "High-pass around " + juce::String (hp) + " Hz.", { FixHighPass, (float) hp, 0.0f, 0.707f } });
     switch (inst)
     {
         case Guitar:
             if (lowMid - mid > 4.0f)
                 out.push_back ({ lowMid - mid > 8.0f ? 2 : 1, "Muddy low-mids", "Too much 200-500 Hz. Cut 2-4 dB around " + hzText (peakHz (B, 200, 500))
-                                 + ". With heavy distortion try less gain: more gain = more mud." });
+                                 + ". With heavy distortion try less gain: more gain = more mud.", { FixPeak, peakHz (B, 200, 500), -3.0f, 1.4f } });
             if (hiMid - mid > 2.0f)
-                out.push_back ({ 1, "Harsh 2-5 kHz", "Upper mids poke out. Cut 2-3 dB around " + hzText (peakHz (B, 2000, 5000)) + "." });
+                out.push_back ({ 1, "Harsh 2-5 kHz", "Upper mids poke out. Cut 2-3 dB around " + hzText (peakHz (B, 2000, 5000)) + ".", { FixPeak, peakHz (B, 2000, 5000), -2.5f, 1.6f } });
             if (air - mid > -14.0f)
-                out.push_back ({ 1, "Fizz above 10 kHz", "Fizzy top end (typical for fuzz and amp sims). Low-pass at 8-10 kHz." });
+                out.push_back ({ 1, "Fizz above 10 kHz", "Fizzy top end (typical for fuzz and amp sims). Low-pass at 8-10 kHz.", { FixLowPass, 9000.0f, 0.0f, 0.707f } });
             break;
         case Vocal:
             if (lowMid - mid > 3.0f)
-                out.push_back ({ 1, "Boxy vocal", "Boomy 200-500 Hz: cut 2-3 dB at " + hzText (peakHz (B, 200, 500)) + ", or sing a bit further from the mic." });
+                out.push_back ({ 1, "Boxy vocal", "Boomy 200-500 Hz: cut 2-3 dB at " + hzText (peakHz (B, 200, 500)) + ", or sing a bit further from the mic.", { FixPeak, peakHz (B, 200, 500), -2.5f, 1.4f } });
             if (hiMid - mid > 4.0f)
-                out.push_back ({ 1, "Harsh vocal", "Piercing 2-4 kHz: cut 2 dB at " + hzText (peakHz (B, 2000, 4000)) + "." });
+                out.push_back ({ 1, "Harsh vocal", "Piercing 2-4 kHz: cut 2 dB at " + hzText (peakHz (B, 2000, 4000)) + ".", { FixPeak, peakHz (B, 2000, 4000), -2.0f, 1.6f } });
             if (pres - mid > 0.0f)
                 out.push_back ({ 1, "Sibilance", "Loud esses at 5-8 kHz: use a de-esser (Tone has one)." });
             else if (pres - mid < -18.0f)
-                out.push_back ({ 1, "Dull vocal", "Little air: add a 2-3 dB shelf above 8 kHz or Tone's exciter." });
+                out.push_back ({ 1, "Dull vocal", "Little air: add a 2-3 dB shelf above 8 kHz or Tone's exciter.", { FixHighShelf, 8000.0f, 2.5f, 0.707f } });
             break;
         case Bass:
             if (sub - low > 3.0f)
-                out.push_back ({ 1, "Too much sub", "Below 55 Hz dominates: phones and small speakers lose it. Trim under 40 Hz and add a little saturation (Tone / Stomp)." });
+                out.push_back ({ 1, "Too much sub", "Below 55 Hz dominates: phones and small speakers lose it. Trim under 40 Hz and add a little saturation (Tone / Stomp).", { FixHighPass, 38.0f, 0.0f, 0.707f } });
             if (lowMid - low > 0.0f)
-                out.push_back ({ 1, "Boxy bass", "More 200-500 Hz than real low end. Cut 2 dB at " + hzText (peakHz (B, 200, 500)) + ", boost 60-100 Hz." });
+                out.push_back ({ 1, "Boxy bass", "More 200-500 Hz than real low end. Cut 2 dB at " + hzText (peakHz (B, 200, 500)) + ", boost 60-100 Hz.", { FixPeak, peakHz (B, 200, 500), -2.0f, 1.2f } });
             if (regionDb (B, 600, 4000) - low < -28.0f)
-                out.push_back ({ 1, "Bass vanishes on phones", "No growl above 600 Hz. Add some 700-1500 Hz or parallel distortion (Stomp with Clean Bass)." });
+                out.push_back ({ 1, "Bass vanishes on phones", "No growl above 600 Hz. Add some 700-1500 Hz or parallel distortion (Stomp with Clean Bass).", { FixPeak, 900.0f, 3.0f, 0.9f } });
             break;
         case Kick:
             if (lowMid - low > -8.0f)
-                out.push_back ({ 1, "Boxy kick", "Cardboard-like 200-500 Hz: cut 3-4 dB at " + hzText (peakHz (B, 250, 500)) + "." });
+                out.push_back ({ 1, "Boxy kick", "Cardboard-like 200-500 Hz: cut 3-4 dB at " + hzText (peakHz (B, 250, 500)) + ".", { FixPeak, peakHz (B, 250, 500), -3.5f, 1.6f } });
             if (hiMid - low < -30.0f)
-                out.push_back ({ 1, "No beater click", "The kick may disappear on small speakers: boost 2-4 kHz by 2-3 dB." });
+                out.push_back ({ 1, "No beater click", "The kick may disappear on small speakers: boost 2-4 kHz by 2-3 dB.", { FixPeak, 3000.0f, 3.0f, 1.2f } });
             break;
         case Drums:
             if (f.kitKickHits >= 10 && f.kitSnareHits >= 10)
@@ -120,24 +120,24 @@ inline void trackChecks (const Features& f, std::vector<Advice>& out, int genre 
                 const float d = f.kitKickDb - f.kitSnareDb - kickVsSnare[juce::jlimit (0, 4, genre)];
                 if (d < -4.0f)
                     out.push_back ({ d < -8.0f ? 2 : 1, "Kick buried in the kit", "Kick hits sit ~" + dbText (d) + " under the snare for " + genreLabel (genre)
-                                     + ". Raise the kick mic, or boost 60-80 Hz by 2-3 dB on the drum bus." });
+                                     + ". Raise the kick mic, or boost 60-80 Hz by 2-3 dB on the drum bus.", { FixPeak, 70.0f, 3.0f, 1.0f } });
                 else if (d > 4.0f)
                     out.push_back ({ d > 8.0f ? 2 : 1, "Snare buried in the kit", "The snare sits ~" + dbText (d) + " under the kick for " + genreLabel (genre)
-                                     + ". Raise the snare mic, or boost ~200 Hz (body) and 3-5 kHz (crack) by 2 dB." });
+                                     + ". Raise the snare mic, or boost ~200 Hz (body) and 3-5 kHz (crack) by 2 dB.", { FixPeak, 200.0f, 2.5f, 1.2f } });
                 const float c = f.kitCymDb - f.kitSnareDb;
                 if (c > -6.0f)
-                    out.push_back ({ c > -2.0f ? 2 : 1, "Cymbals over the snare", "Cymbals are about as loud as the snare hits: lower the overheads 2-3 dB or cut 6-10 kHz." });
+                    out.push_back ({ c > -2.0f ? 2 : 1, "Cymbals over the snare", "Cymbals are about as loud as the snare hits: lower the overheads 2-3 dB or cut 6-10 kHz.", { FixHighShelf, 7000.0f, -2.5f, 0.707f } });
                 else if (c < -26.0f)
-                    out.push_back ({ 1, "Dull kit", "Cymbals are barely there: lift the overheads or add a 2 dB shelf above 8 kHz." });
+                    out.push_back ({ 1, "Dull kit", "Cymbals are barely there: lift the overheads or add a 2 dB shelf above 8 kHz.", { FixHighShelf, 8000.0f, 2.0f, 0.707f } });
                 if (f.crestDb > 0.0f && f.crestDb < 8.0f)
                     out.push_back ({ 1, "Squashed kit", "Hits stick out only " + dbText (f.crestDb) + " over the rest: slower attack on the drum-bus compressor or parallel compression instead." });
             }
             else if (pres - mid > 6.0f)
-                out.push_back ({ 1, "Harsh cymbals", "Cymbals bite at 5-9 kHz: cut 2-3 dB at " + hzText (peakHz (B, 5000, 10000)) + "." });
+                out.push_back ({ 1, "Harsh cymbals", "Cymbals bite at 5-9 kHz: cut 2-3 dB at " + hzText (peakHz (B, 5000, 10000)) + ".", { FixPeak, peakHz (B, 5000, 10000), -2.5f, 1.4f } });
             break;
         case Keys:
             if (lowMid - mid > 5.0f)
-                out.push_back ({ 1, "Muddy keys", "Heavy 200-500 Hz: cut 2-3 dB at " + hzText (peakHz (B, 200, 500)) + " or high-pass to leave room for bass and guitars." });
+                out.push_back ({ 1, "Muddy keys", "Heavy 200-500 Hz: cut 2-3 dB at " + hzText (peakHz (B, 200, 500)) + " or high-pass to leave room for bass and guitars.", { FixPeak, peakHz (B, 200, 500), -2.5f, 1.4f } });
             break;
         default: break;
     }
@@ -156,7 +156,7 @@ inline void trackChecks (const Features& f, std::vector<Advice>& out, int genre 
     if (f.corr < -0.2f && f.sideDb > -20.0f)
         out.push_back ({ 2, "Phase problem", "Left and right cancel in mono (correlation " + juce::String (f.corr, 2) + "). Flip polarity on one side/mic or check the widener." });
     if ((inst == Kick || inst == Bass || inst == Snare || inst == Vocal) && f.lowSideDb > -12.0f && f.sideDb > -20.0f)
-        out.push_back ({ 1, "Wide low end", "Keep the " + nm.toLowerCase() + " centred: low end below ~120 Hz should be mono (Master's Mono Bass)." });
+        out.push_back ({ 1, "Wide low end", "Keep the " + nm.toLowerCase() + " centred: low end below ~120 Hz should be mono (Master's Mono Bass).", { FixMonoLow, 120.0f, 0.0f, 0.707f } });
 }
 
 /** Статус і до kItems порад, найважливіші першими. */
@@ -165,7 +165,7 @@ inline Verdict makeVerdict (std::vector<Advice> items, bool valid)
     Verdict v;
     std::stable_sort (items.begin(), items.end(), [] (const Advice& a, const Advice& b) { return a.sev > b.sev; });
     v.numItems = std::min ((int) items.size(), Verdict::kItems);
-    for (int i = 0; i < v.numItems; ++i) setItem (v.items[i], items[(size_t) i].sev, items[(size_t) i].title, items[(size_t) i].text);
+    for (int i = 0; i < v.numItems; ++i) setItem (v.items[i], items[(size_t) i].sev, items[(size_t) i].title, items[(size_t) i].text, items[(size_t) i].fix);
     v.status = ! valid ? -1 : items.empty() ? 0 : items.front().sev;
     if (! valid && v.numItems == 0)
     {
@@ -194,15 +194,15 @@ inline float balanceTarget (int inst, int genre, bool hasKickOrSnare)
 }
 
 /** Пари, що б'ються за частоти, і що з цим робити. */
-struct Clash { int a, b; float lo, hi; const char* fix; };
+struct Clash { int a, b; float lo, hi; const char* fix; int cut; };   // cut — кому різати (кнопка FIX)
 inline const std::array<Clash, 5>& clashes()
 {
     static const std::array<Clash, 5> c {{
-        { Kick, Bass, 40, 125, "Decide who owns the lowest octave: cut 2-3 dB at %f in one of them, or sidechain the bass to the kick." },
-        { Bass, Guitar, 100, 315, "High-pass the guitars around 90-120 Hz and cut ~2 dB at %f in the guitars." },
-        { Guitar, Vocal, 1000, 4000, "Cut 2-3 dB at %f in the guitars (a dynamic EQ keyed from the vocal is ideal)." },
-        { Keys, Vocal, 1000, 4000, "Cut 2-3 dB at %f in the keys, or pan them away from the vocal." },
-        { Keys, Guitar, 250, 2500, "Give each its own range: cut ~2 dB at %f in one, boost it in the other." } }};
+        { Kick, Bass, 40, 125, "Decide who owns the lowest octave: cut 2-3 dB at %f in one of them, or sidechain the bass to the kick.", Bass },
+        { Bass, Guitar, 100, 315, "High-pass the guitars around 90-120 Hz and cut ~2 dB at %f in the guitars.", Guitar },
+        { Guitar, Vocal, 1000, 4000, "Cut 2-3 dB at %f in the guitars (a dynamic EQ keyed from the vocal is ideal).", Guitar },
+        { Keys, Vocal, 1000, 4000, "Cut 2-3 dB at %f in the keys, or pan them away from the vocal.", Keys },
+        { Keys, Guitar, 250, 2500, "Give each its own range: cut ~2 dB at %f in one, boost it in the other.", Keys } }};
     return c;
 }
 } // namespace mix
