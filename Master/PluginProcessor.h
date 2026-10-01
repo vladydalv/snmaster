@@ -7,6 +7,7 @@
 #include "Presets.h"
 #include "TrackAnalysis.h"
 #include "Reference.h"
+#include "../Common/MixWatch.h"
 
 class SpacenerdMasterProcessor final : public juce::AudioProcessor, private juce::Timer
 {
@@ -59,10 +60,15 @@ public:
     const RefTrack* reference() const noexcept { return ref.get(); }    // лише message thread
     bool isLoadingReference() const noexcept { return refLoading.load(); }
     juce::String refError;
+    mix::MixWatch mixWatch;          // поради зі зведення від SN Listen на доріжках
     std::function<void()> onReferenceChanged;
 
 private:
-    void timerCallback() override { analysis.tick(); }
+    void timerCallback() override
+    {
+        analysis.tick();
+        mixWatch.tick ((int) apvts.getRawParameterValue (ParamIDs::targetGenre)->load());
+    }
     float p (const char* id) const noexcept { return params.get (id); }
     /** Плавне вмикання/вимикання модуля в 4x-домені (без клацань). */
     template <typename Fn> void runFaded (float& mix, bool target, float* const* os, int numCh, int n, Fn&& fn);

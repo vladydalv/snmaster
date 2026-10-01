@@ -81,6 +81,7 @@ void SpacenerdMasterProcessor::prepareToPlay (double sampleRate, int samplesPerB
     loudness.prepare (fs, numCh);
     inLoudness.prepare (fs, numCh);
     analysis.prepare (fs);
+    mixWatch.frames.prepare (fs);
     osDry.setSize (numCh, samplesPerBlock * factor);
     firstBlock = true;
     clipPrevX.fill (0.0f); clipPrevF.fill (0.0f);
@@ -224,6 +225,7 @@ void SpacenerdMasterProcessor::processChunk (juce::AudioBuffer<float>& buffer)
 
     const bool match = on (ParamIDs::gainMatch);
     inLoudness.process (buffer);   // гучність оригіналу (для Gain Match і Assist)
+    mixWatch.frames.push (buffer.getReadPointer (0), numCh > 1 ? buffer.getReadPointer (1) : nullptr, n, hostPlaying ? (int64_t) hostPos : -1);
 
     // --- Вхід
     inGainSm.setTargetValue (dbToGain (p (ParamIDs::inGain)));

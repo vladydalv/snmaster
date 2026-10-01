@@ -32,6 +32,9 @@ public:
         reset();
     }
 
+    /** Як часто оновлювати оцінку (за замовчуванням 5 мс). */
+    void setHopSeconds (double sec) { hop = std::max (1, (int) (sec * dfs)); }
+
     void reset()
     {
         std::fill (dbuf.begin(), dbuf.end(), 0.0f);

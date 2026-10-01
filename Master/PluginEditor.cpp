@@ -105,6 +105,7 @@ void MeterPanel::resized()
 MainContent::MainContent (SpacenerdMasterProcessor& p)
     : meters (p),
       analyzer (p),
+      mixPanel (p),
       proc (p),
       presetBox (p),
       matchButton (p.apvts, ParamIDs::gainMatch, "GAIN MATCH", Theme::gr),
@@ -165,7 +166,7 @@ MainContent::MainContent (SpacenerdMasterProcessor& p)
     proc.onReferenceChanged = [safe = Component::SafePointer<MainContent> (this)] { if (safe != nullptr) safe->updateRefButton(); };
     updateRefButton();
 
-    for (auto* c : std::initializer_list<Component*> { &presetBox, &matchButton, &abButton, &refButton, &listenSel, &analyzer, &eq, &comp, &sat, &width, &lim, &meters })
+    for (auto* c : std::initializer_list<Component*> { &presetBox, &matchButton, &abButton, &refButton, &listenSel, &analyzer, &mixPanel, &eq, &comp, &sat, &width, &lim, &meters })
         addAndMakeVisible (c);
 }
 
@@ -181,6 +182,7 @@ void MainContent::tick()
 {
     meters.update();
     analyzer.tick();
+    mixPanel.tick();
     presetBox.sync();
     const float m = proc.matchDb.load();
     if (std::abs (m - shownMatch) > 0.05f) { shownMatch = m; repaint (0, 0, getWidth(), 56); }
@@ -220,6 +222,8 @@ void MainContent::resized()
     auto r = getLocalBounds().withTrimmedTop (56).reduced (16, 0).withTrimmedBottom (16);
     constexpr int gap = 10;
     analyzer.setBounds (r.removeFromTop (SpacenerdMasterEditor::analyzerH));
+    r.removeFromTop (gap);
+    mixPanel.setBounds (r.removeFromTop (SpacenerdMasterEditor::mixH));
     r.removeFromTop (gap);
 
     eq.setBounds   (r.removeFromLeft (280)); r.removeFromLeft (gap);

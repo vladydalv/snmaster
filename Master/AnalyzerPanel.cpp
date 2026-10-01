@@ -24,7 +24,7 @@ AnalyzerPanel::AnalyzerPanel (SpacenerdMasterProcessor& p)
       loudSel (p.apvts, ParamIDs::loudTarget, "Release for")
 {
     resetButton.setTooltip ("Start listening again (e.g. for another song). The analyzer averages everything it hears since RESET.");
-    resetButton.onClick = [this] { ta.reset(); };
+    resetButton.onClick = [this] { ta.reset(); proc.mixWatch.requestReset(); proc.mixWatch.refreshNow(); };
     assistButton.setTooltip ("Set EQ, compressor, limiter and mono bass towards the tonal target and the streaming loudness target");
     assistButton.onClick = [this] { applyAssist(); };
     assistButton.setEnabled (false);
