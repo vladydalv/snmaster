@@ -194,6 +194,14 @@ void SpacenerdMasterProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 {
     juce::ScopedNoDenormals noDenormals;
 
+    hostPlaying = false;
+    if (auto* ph = getPlayHead())
+        if (auto pos = ph->getPosition())
+        {
+            hostPlaying = pos->getIsPlaying();
+            if (auto t = pos->getTimeInSamples()) hostPos = *t;
+        }
+
     // Якщо хост дав блок більший за оголошений — обробляємо частинами
     const int total = buffer.getNumSamples();
     for (int start = 0; start < total; start += maxBlock)
@@ -201,6 +209,7 @@ void SpacenerdMasterProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
         juce::AudioBuffer<float> chunk (buffer.getArrayOfWritePointers(), buffer.getNumChannels(),
                                         start, std::min (maxBlock, total - start));
         processChunk (chunk);
+        hostPos += chunk.getNumSamples();
     }
 }
 
@@ -382,6 +391,129 @@ void SpacenerdMasterProcessor::processChunk (juce::AudioBuffer<float>& buffer)
     matchDb.store (match ? matchState : 0.0f);
     matchSm.setTargetValue (dbToGain (matchState));
     matchSm.applyGain (buffer, n);
+
+    // --- Лише прослуховування: референс A/B і «як звучатиме на телефоні / в авто»
+    applyReference (buffer, numCh, n);
+    const int m = juce::jlimit (0, 4, (int) p (ParamIDs::monitor));
+    if (m != mon.mode) mon.set (m, fs);
+    mon.process (buffer, numCh, n, fs);
+}
+
+void SpacenerdMasterProcessor::applyReference (juce::AudioBuffer<float>& buffer, int numCh, int n)
+{
+    const float t = on (ParamIDs::refAB) ? 1.0f : 0.0f;
+    if (refMix <= 0.0f && t <= 0.0f) return;
+    const juce::SpinLock::ScopedTryLockType lock (refLock);
+    if (! lock.isLocked() || ref == nullptr) { refMix = 0.0f; return; }
+
+    const float step = std::min (1.0f, (float) n / (float) (0.02 * fs));
+    const float m0 = refMix;
+    refMix = std::abs (t - refMix) <= step ? t : refMix + (t > refMix ? step : -step);
+
+    // Однакова гучність: референс звучить так само голосно, як твій мастер зараз
+    const float mixLufs = loudness.integrated.load() > -70.0f ? loudness.integrated.load() : loudness.shortTerm.load();
+    const float gT = mixLufs > -70.0f && ref->lufs > -70.0f ? juce::jlimit (0.03f, 4.0f, dbToGain (mixLufs - ref->lufs)) : 1.0f;
+    refGainSm += (gT - refGainSm) * std::min (1.0f, (float) n / (float) (0.3 * fs));
+
+    const int len = ref->audio.getNumSamples();
+    const juce::int64 start = hostPos;
+    for (int ch = 0; ch < numCh; ++ch)
+    {
+        const float* r = ref->audio.getReadPointer (std::min (ch, 1));
+        float* d = buffer.getWritePointer (ch);
+        for (int i = 0; i < n; ++i)
+        {
+            const float k = m0 + (refMix - m0) * (float) i / (float) n;
+            const float rv = hostPlaying ? r[(size_t) ((start + i) % len + len) % len] * refGainSm : 0.0f;
+            d[i] = (1.0f - k) * d[i] + k * rv;
+        }
+    }
+}
+
+void SpacenerdMasterProcessor::Monitor::set (int m, double fs)
+{
+    mode = m; fadeLen = fadeIn = std::max (1, (int) (0.02 * fs));
+    for (auto& chain : f) for (auto& b : chain) { b.reset(); b.setBypass(); }
+    sn::Biquad a, b, c, d;
+    a.setBypass(); b.setBypass(); c.setBypass(); d.setBypass();
+    switch (m)
+    {
+        case 1: // телефон: без басу, «коробковий» верх-середина
+            a.setHighPass (fs, 350.0, 0.707); b.setHighPass (fs, 350.0, 0.707);
+            c.setPeak (fs, 2500.0, 1.0, 4.0);  d.setLowPass (fs, 8000.0, 0.707); break;
+        case 2: // навушники-вкладиші: трохи бубнять, яскравіша присутність
+            a.setHighPass (fs, 45.0, 0.707);   b.setLowShelf (fs, 110.0, 0.707, 3.0);
+            c.setPeak (fs, 3000.0, 1.0, 2.5);  d.setLowPass (fs, 14000.0, 0.707); break;
+        case 3: // авто: роздутий бас, гул салону, тьмяний верх
+            a.setLowShelf (fs, 70.0, 0.707, 5.0); b.setPeak (fs, 380.0, 1.0, -3.0);
+            c.setHighShelf (fs, 5000.0, 0.707, -4.0); d.setPeak (fs, 160.0, 1.5, 2.0); break;
+        default: break;
+    }
+    for (auto& chain : f) { chain[0].copyCoeffs (a); chain[1].copyCoeffs (b); chain[2].copyCoeffs (c); chain[3].copyCoeffs (d); }
+}
+
+void SpacenerdMasterProcessor::Monitor::process (juce::AudioBuffer<float>& buffer, int numCh, int n, double fs)
+{
+    if (mode == 0 && fadeIn <= 0) return;
+    juce::ignoreUnused (fs);
+    auto* l = buffer.getWritePointer (0);
+    auto* r = numCh > 1 ? buffer.getWritePointer (1) : nullptr;
+    for (int i = 0; i < n; ++i)
+    {
+        float L = l[i], R = r != nullptr ? r[i] : l[i];
+        if (mode == 1 || mode == 4) { const float mid = 0.5f * (L + R); L = R = mid; }        // телефон і моно
+        else if (mode == 3) { const float mid = 0.5f * (L + R), side = 0.5f * (L - R) * 0.5f; L = mid + side; R = mid - side; }
+        for (auto& b : f[0]) L = b.process (L);
+        if (r != nullptr) for (auto& b : f[1]) R = b.process (R);
+        float g = 1.0f;
+        if (fadeIn > 0) { g = 1.0f - (float) fadeIn / (float) fadeLen; --fadeIn; }
+        l[i] = L * g;
+        if (r != nullptr) r[i] = R * g;
+    }
+}
+
+void SpacenerdMasterProcessor::loadReference (const juce::File& file)
+{
+    if (refLoading.exchange (true)) return;
+    refError.clear();
+    const double rate = fs > 0.0 ? fs : 48000.0;
+    pool.addJob ([this, file, rate]
+    {
+        auto loaded = RefTrack::load (file, rate);
+        juce::MessageManager::callAsync ([this, alive = alive, l = std::shared_ptr<RefTrack> (loaded.release()), file]
+        {
+            if (! *alive) return;
+            refLoading = false;
+            if (l == nullptr) { refError = "Can't read " + file.getFileName(); if (onReferenceChanged) onReferenceChanged(); return; }
+            setReferenceTrack (std::make_unique<RefTrack> (std::move (*l)));
+            if (onReferenceChanged) onReferenceChanged();
+        });
+    });
+}
+
+void SpacenerdMasterProcessor::setReferenceTrack (std::unique_ptr<RefTrack> fresh)
+{
+    if (fresh == nullptr) return;
+    std::unique_ptr<RefTrack> old;
+    {
+        const juce::SpinLock::ScopedLockType lock (refLock);
+        old = std::move (ref);
+        ref = std::move (fresh);
+    }
+    analysis.setReference (ref->spectrum, ref->name, ref->lufs);
+    apvts.state.setProperty ("refPath", ref->file.getFullPathName(), nullptr);
+}
+
+void SpacenerdMasterProcessor::clearReference()
+{
+    std::unique_ptr<RefTrack> old;
+    {
+        const juce::SpinLock::ScopedLockType lock (refLock);
+        old = std::move (ref);
+    }
+    analysis.clearReference();
+    apvts.state.removeProperty ("refPath", nullptr);
+    if (onReferenceChanged) onReferenceChanged();
 }
 
 void SpacenerdMasterProcessor::setCurrentProgram (int index)
@@ -395,7 +527,7 @@ void SpacenerdMasterProcessor::setCurrentProgram (int index)
         auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param);
         const auto pid = ranged != nullptr ? ranged->getParameterID() : juce::String();
         if (ranged == nullptr || pid == ParamIDs::gainMatch || pid == ParamIDs::targetGenre || pid == ParamIDs::targetDecade
-            || pid == ParamIDs::loudTarget)
+            || pid == ParamIDs::loudTarget || pid == ParamIDs::refAB || pid == ParamIDs::monitor)
             continue;   // моніторинг і ціль аналізатора — не частина звуку пресету
 
         float value = ranged->getDefaultValue();
@@ -432,6 +564,10 @@ void SpacenerdMasterProcessor::setStateInformation (const void* data, int sizeIn
         {
             apvts.replaceState (juce::ValueTree::fromXml (*xml));
             currentPreset.store ((int) apvts.state.getProperty ("preset", 0));
+            // Референс з проєкту — підвантажуємо знову (сам файл не зберігається в проєкті)
+            const juce::File f (apvts.state.getProperty ("refPath", juce::String()).toString());
+            if (f.existsAsFile())
+                juce::MessageManager::callAsync ([this, alive = alive, f] { if (*alive) loadReference (f); });
         }
 }
 

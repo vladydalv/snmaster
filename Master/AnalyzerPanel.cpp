@@ -61,7 +61,7 @@ void AnalyzerPanel::applyAssist()
 {
     if (ta.inAn.songSeconds() < 2.0) return;
 
-    const auto tgt = an::normalise (an::targetCurve (ta.targetYear(), ta.targetGenreIdx()));
+    const auto tgt = an::normalise (ta.targetSpectrum());
     const auto in = an::normalise (ta.inAn.song());
     an::Spectrum dev;
     for (int b = 0; b < an::kBands; ++b) dev[(size_t) b] = in[(size_t) b] - tgt[(size_t) b];
@@ -189,10 +189,10 @@ void AnalyzerPanel::drawSpectrum (Graphics& g, Rectangle<float> r)
     };
 
     // Для порівняння: типовий рок-мастер тієї ж епохи (коли обрано інший жанр — видно, чим жанр відрізняється)
-    if (ta.targetGenreIdx() != 0)
+    if (ta.targetGenreIdx() != 0 && ! ta.hasReference())
         dashedStroke (pathOf (an::normalise (an::targetCurve (ta.targetYear(), 0))), Theme::muted.withAlpha (0.45f), 1.0f);
 
-    const auto tgt = an::normalise (an::targetCurve (ta.targetYear(), ta.targetGenreIdx()));
+    const auto tgt = an::normalise (ta.targetSpectrum());
     const bool haveSong = ta.inAn.songSeconds() >= 2.0;
 
     // «Зараз» — ледь помітно, лише щоб бачити, що аналізатор слухає
@@ -221,9 +221,10 @@ void AnalyzerPanel::drawSpectrum (Graphics& g, Rectangle<float> r)
     g.setColour (Theme::accent);
     g.drawText ("YOUR TRACK (whole song + EQ)", leg.removeFromLeft (190.0f), Justification::centredLeft);
     g.setColour (Theme::accent2);
-    g.drawText ("TARGET: " + String (an::genreName (ta.targetGenreIdx())).toUpperCase() + " " + an::decadeName (ta.targetYear()),
-                leg.removeFromLeft (170.0f), Justification::centredLeft);
-    if (ta.targetGenreIdx() != 0)
+    g.drawText (ta.hasReference() ? "REFERENCE: " + ta.referenceName().toUpperCase()
+                                  : "TARGET: " + String (an::genreName (ta.targetGenreIdx())).toUpperCase() + " " + an::decadeName (ta.targetYear()),
+                leg.removeFromLeft (ta.hasReference() ? 260.0f : 170.0f), Justification::centredLeft);
+    if (ta.targetGenreIdx() != 0 && ! ta.hasReference())
     {
         g.setColour (Theme::muted);
         g.drawText ("ROCK " + an::decadeName (ta.targetYear()), leg.removeFromLeft (90.0f), Justification::centredLeft);
@@ -251,7 +252,7 @@ void AnalyzerPanel::paint (Graphics& g)
 
     g.setColour (Theme::muted);
     g.setFont (FontOptions (10.0f, Font::bold));
-    g.drawText ("MATCH TO TARGET", v.removeFromTop (14.0f), Justification::centredLeft);
+    g.drawText (ta.hasReference() ? "MATCH TO REFERENCE" : "MATCH TO TARGET", v.removeFromTop (14.0f), Justification::centredLeft);
     auto line = v.removeFromTop (30.0f);
     const int pct = report.matchPercent;
     g.setColour (! have ? Theme::muted : pct >= 85 ? Theme::good : pct >= 65 ? Theme::warn : Theme::hot);

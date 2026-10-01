@@ -337,6 +337,93 @@ int main (int argc, char* argv[])
         check (std::abs (t + 20.5f) < 0.01f && s > 0.5f, "State save/restore");
     }
 
+    // Референс A/B: вирівнювання гучності і синхронізація з позицією хоста
+    {
+        struct Head final : AudioPlayHead
+        {
+            int64 pos = 0;
+            Optional<PositionInfo> getPosition() const override
+            {
+                PositionInfo i; i.setIsPlaying (true); i.setTimeInSamples (pos); return i;
+            }
+        } head;
+
+        auto file = File::getSpecialLocation (File::tempDirectory).getChildFile ("sn_ref_test.wav");
+        {
+            AudioBuffer<float> r (2, 48000 * 6);
+            Random rnd (7);
+            for (int i = 0; i < r.getNumSamples(); ++i)
+            {
+                const float v = 0.1f * (float) std::sin (2.0 * MathConstants<double>::pi * 220.0 * i / 48000.0) + 0.02f * (rnd.nextFloat() - 0.5f);
+                r.setSample (0, i, v); r.setSample (1, i, v);
+            }
+            file.deleteFile();
+            WavAudioFormat wav;
+            std::unique_ptr<AudioFormatWriter> w (wav.createWriterFor (new FileOutputStream (file), 48000.0, 2, 24, {}, 0));
+            w->writeFromAudioSampleBuffer (r, 0, r.getNumSamples());
+        }
+        auto track = RefTrack::load (file, 48000.0);
+        check (track != nullptr && std::abs (track->lufs + 23.0f) < 3.0f,
+               "Reference loads, loudness " + String (track ? track->lufs : 0.0f, 1) + " LUFS");
+
+        SpacenerdMasterProcessor p;
+        allOff (p);
+        p.setPlayHead (&head);
+        p.setReferenceTrack (std::move (track));
+        const auto mixGen = [] (AudioBuffer<float>& b, int64 start)
+        {
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                const float v = 0.4f * (float) std::sin (2.0 * MathConstants<double>::pi * 110.0 * (double) (start + i) / 48000.0);
+                b.setSample (0, i, v); b.setSample (1, i, v);
+            }
+        };
+        p.setRateAndBufferSizeDetails (48000.0, 512);
+        p.prepareToPlay (48000.0, 512);
+        MidiBuffer midi;
+        sn::LoudnessMeter lm; lm.prepare (48000.0, 2);
+        for (int pass = 0; pass < 2; ++pass)
+        {
+            setParam (p, ParamIDs::refAB, pass == 1 ? 1.0f : 0.0f);
+            lm.requestReset();
+            for (int k = 0; k < 48000 * 4 / 512; ++k)
+            {
+                AudioBuffer<float> b (2, 512);
+                mixGen (b, head.pos);
+                p.processBlock (b, midi);
+                head.pos += 512;
+                if (k > 40) lm.process (b);
+            }
+            static float mixL = 0.0f;
+            if (pass == 0) mixL = lm.integrated.load();
+            else check (std::abs (lm.integrated.load() - mixL) < 1.0f,
+                        "Reference A/B loudness-matched: mix " + String (mixL, 1) + ", ref " + String (lm.integrated.load(), 1) + " LUFS");
+        }
+        file.deleteFile();
+    }
+
+    // Listen On: Phone ріже бас, Mono зводить канали
+    {
+        const auto level = [] (int mode, double hz, bool antiphase)
+        {
+            SpacenerdMasterProcessor p;
+            allOff (p);
+            setParam (p, ParamIDs::monitor, (float) mode);
+            auto out = run (p, 48000.0, 2, [hz, antiphase] (AudioBuffer<float>& b, int64 start)
+            {
+                for (int i = 0; i < b.getNumSamples(); ++i)
+                {
+                    const float v = 0.3f * (float) std::sin (2.0 * MathConstants<double>::pi * hz * (double) (start + i) / 48000.0);
+                    b.setSample (0, i, v); b.setSample (1, i, antiphase ? -v : v);
+                }
+            });
+            return sn::gainToDb (out.getRMSLevel (0, 48000, 48000) / (0.3f / std::sqrt (2.0f)));
+        };
+        const float studio = level (0, 60.0, false), phone = level (1, 60.0, false), mono = level (4, 1000.0, true);
+        check (std::abs (studio) < 0.5f && phone < -20.0f && mono < -40.0f,
+               "Listen On: studio " + String (studio, 1) + " dB, phone @60 Hz " + String (phone, 1) + " dB, mono antiphase " + String (mono, 1) + " dB");
+    }
+
     // Знімок інтерфейсу (потрібен X-сервер)
     if (argc > 1)
     {

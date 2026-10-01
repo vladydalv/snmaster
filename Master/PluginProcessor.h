@@ -6,12 +6,13 @@
 #include "MasterDSP.h"
 #include "Presets.h"
 #include "TrackAnalysis.h"
+#include "Reference.h"
 
 class SpacenerdMasterProcessor final : public juce::AudioProcessor, private juce::Timer
 {
 public:
     SpacenerdMasterProcessor();
-    ~SpacenerdMasterProcessor() override { stopTimer(); }
+    ~SpacenerdMasterProcessor() override { *alive = false; stopTimer(); pool.removeAllJobs (true, 10000); }
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -50,6 +51,15 @@ public:
     std::atomic<float> matchDb { 0.0f };        // поточна корекція Gain Match
     sn::StereoFifo inFifo, outFifo;             // для аналізатора
     TrackAnalysis analysis { apvts, inFifo, outFifo, loudness, inLoudness };   // живе тут: не губиться, коли вікно закрите
+
+    // Референс: завантаження у фоні, A/B на однаковій гучності (лише message thread викликає ці методи)
+    void loadReference (const juce::File&);
+    void clearReference();
+    void setReferenceTrack (std::unique_ptr<RefTrack>);   // message thread
+    const RefTrack* reference() const noexcept { return ref.get(); }    // лише message thread
+    bool isLoadingReference() const noexcept { return refLoading.load(); }
+    juce::String refError;
+    std::function<void()> onReferenceChanged;
 
 private:
     void timerCallback() override { analysis.tick(); }
@@ -91,6 +101,23 @@ private:
     juce::AudioBuffer<float> osDry;
     // Кліпер (ADAA 1-го порядку): стан по каналах
     std::array<float, 2> clipPrevX {}, clipPrevF {};
+
+    // Референс і монітори
+    std::unique_ptr<RefTrack> ref;
+    juce::SpinLock refLock;
+    juce::ThreadPool pool { 1 };
+    std::atomic<bool> refLoading { false };
+    std::shared_ptr<bool> alive = std::make_shared<bool> (true);
+    float refMix = 0.0f, refGainSm = 1.0f;
+    juce::int64 hostPos = 0; bool hostPlaying = false;
+    struct Monitor
+    {
+        int mode = 0, fadeIn = 0, fadeLen = 1;
+        std::array<std::array<sn::Biquad, 4>, 2> f;
+        void set (int m, double fs);
+        void process (juce::AudioBuffer<float>&, int numCh, int n, double fs);
+    } mon;
+    void applyReference (juce::AudioBuffer<float>&, int numCh, int n);
 
     double fs = 44100.0, osFs = 176400.0;
     static constexpr int kOsOrder = 2; // 2^2 = 4x

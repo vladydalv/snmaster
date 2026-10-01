@@ -39,7 +39,11 @@ public:
 private:
     SpacenerdMasterProcessor& proc;
     snui::PresetBox presetBox;
-    snui::PillToggle matchButton;
+    snui::PillToggle matchButton, abButton;
+    juce::TextButton refButton { "LOAD REFERENCE..." };
+    snui::Segmented listenSel;
+    std::unique_ptr<juce::FileChooser> chooser;
+    void updateRefButton();
     float shownMatch = 0.0f;
     snui::Section eq, comp, sat, width, lim;
 };

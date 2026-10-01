@@ -108,6 +108,8 @@ MainContent::MainContent (SpacenerdMasterProcessor& p)
       proc (p),
       presetBox (p),
       matchButton (p.apvts, ParamIDs::gainMatch, "GAIN MATCH", Theme::gr),
+      abButton (p.apvts, ParamIDs::refAB, "A/B REF", Theme::accent2),
+      listenSel (p.apvts, ParamIDs::monitor),
       eq    (p.apvts, "EQ",         ParamIDs::eqOn,    4),
       comp  (p.apvts, "COMPRESSOR", ParamIDs::compOn,  4),
       sat   (p.apvts, "SATURATION", ParamIDs::satOn,   2),
@@ -150,9 +152,29 @@ MainContent::MainContent (SpacenerdMasterProcessor& p)
     lim.knob (s, ParamIDs::limRel,  "Release").help ("limiter recovery time");
 
     matchButton.setTooltip ("Gain Match: output level follows input loudness, so Bypass compares at equal loudness. Turn off before bouncing.");
+    abButton.setTooltip ("Hear your reference instead of your master, at the same loudness, from the same song position. Turn off before bouncing.");
+    listenSel.setTooltip ("Check how the master translates: phone speaker, earbuds, car, mono. Monitoring only: set back to Studio before bouncing!");
+    refButton.setTooltip ("Load a record you want to sound like (WAV/AIFF/MP3/FLAC). It becomes the analyzer target and the A/B reference. Right-click: remove.");
+    refButton.onClick = [this]
+    {
+        if (ModifierKeys::currentModifiers.isPopupMenu()) { proc.clearReference(); return; }
+        chooser = std::make_unique<FileChooser> ("Reference track", File(), "*.wav;*.aif;*.aiff;*.mp3;*.m4a;*.flac");
+        chooser->launchAsync (FileBrowserComponent::openMode | FileBrowserComponent::canSelectFiles,
+                              [this] (const FileChooser& fc) { if (fc.getResult().existsAsFile()) { proc.loadReference (fc.getResult()); updateRefButton(); } });
+    };
+    proc.onReferenceChanged = [safe = Component::SafePointer<MainContent> (this)] { if (safe != nullptr) safe->updateRefButton(); };
+    updateRefButton();
 
-    for (auto* c : std::initializer_list<Component*> { &presetBox, &matchButton, &analyzer, &eq, &comp, &sat, &width, &lim, &meters })
+    for (auto* c : std::initializer_list<Component*> { &presetBox, &matchButton, &abButton, &refButton, &listenSel, &analyzer, &eq, &comp, &sat, &width, &lim, &meters })
         addAndMakeVisible (c);
+}
+
+void MainContent::updateRefButton()
+{
+    if (proc.isLoadingReference()) refButton.setButtonText ("LOADING...");
+    else if (auto* r = proc.reference()) refButton.setButtonText ("REF: " + r->name);
+    else refButton.setButtonText (proc.refError.isNotEmpty() ? proc.refError : String ("LOAD REFERENCE..."));
+    abButton.setEnabled (proc.reference() != nullptr);
 }
 
 void MainContent::tick()
@@ -162,12 +184,22 @@ void MainContent::tick()
     presetBox.sync();
     const float m = proc.matchDb.load();
     if (std::abs (m - shownMatch) > 0.05f) { shownMatch = m; repaint (0, 0, getWidth(), 56); }
+    repaint (listenSel.getBounds().expanded (6));
+    if (proc.isLoadingReference() != (refButton.getButtonText() == "LOADING...")) updateRefButton();
 }
 
 void MainContent::paint (Graphics& g)
 {
     g.fillAll (Theme::bg);
-    drawHeader (g, getWidth(), "MASTER", "EQ > COMP > SAT > STEREO > LIMIT   |   4x oversampled");
+    drawHeader (g, getWidth(), "MASTER", {});
+    // Попередження: режими прослуховування потрапляють і в експорт
+    const bool listening = (int) proc.apvts.getRawParameterValue (ParamIDs::monitor)->load() != 0
+                        || proc.apvts.getRawParameterValue (ParamIDs::refAB)->load() > 0.5f;
+    if (listening)
+    {
+        g.setColour (Theme::hot.withAlpha (0.18f));
+        g.fillRoundedRectangle (listenSel.getBounds().toFloat().expanded (4.0f, 3.0f), 8.0f);
+    }
 
     if (matchButton.getToggleState())
     {
@@ -179,8 +211,11 @@ void MainContent::paint (Graphics& g)
 
 void MainContent::resized()
 {
-    presetBox.setBounds (300, 14, 240, 28);
-    matchButton.setBounds (556, 16, 96, 24);
+    presetBox.setBounds (300, 14, 200, 28);
+    matchButton.setBounds (512, 16, 92, 24);
+    refButton.setBounds (614, 15, 180, 26);
+    abButton.setBounds (802, 16, 76, 24);
+    listenSel.setBounds (890, 14, getWidth() - 906, 28);
 
     auto r = getLocalBounds().withTrimmedTop (56).reduced (16, 0).withTrimmedBottom (16);
     constexpr int gap = 10;

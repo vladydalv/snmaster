@@ -103,6 +103,14 @@ public:
     }
 
     double outMeasuredSeconds() const { return outLoudN / 30.0; }
+    /** Референс замість жанрової цілі (message thread). */
+    void setReference (const an::Spectrum& sp, const juce::String& name, float lufs) { refSpec = sp; refName = name; refLufs = lufs; hasRef = true; updateReport(); }
+    void clearReference() { hasRef = false; refName.clear(); updateReport(); }
+    bool hasReference() const noexcept { return hasRef; }
+    const juce::String& referenceName() const noexcept { return refName; }
+    float referenceLufs() const noexcept { return refLufs; }
+    an::Spectrum targetSpectrum() const { return hasRef ? refSpec : an::targetCurve (targetYear(), targetGenreIdx()); }
+
     float outLufs() const { return outLoudN > 30 ? (float) (10.0 * std::log10 (outLoudE / outLoudN)) : -100.0f; }
     float inLufs() const  { return inLoudN > 0 ? (float) (10.0 * std::log10 (inLoudE / inLoudN)) : -100.0f; }
     float truePeakDb() const { return sn::gainToDb (tpSince); }
@@ -114,7 +122,7 @@ public:
         const float tp = truePeakDb();
         const auto mix = predicted();
         report = an::analyse (mix, lufs, tp, outAn.correlation(), outAn.lowSideDb(), targetYear(), targetGenreIdx(),
-                              loudTargetLufs(), loudTargetName());
+                              loudTargetLufs(), loudTargetName(), hasRef ? &refSpec : nullptr, refName);
         std::stable_sort (report.verdicts.begin(), report.verdicts.end(), [] (const an::Verdict& a, const an::Verdict& b) { return a.level > b.level; });
 
         // На що схожий трек (у межах жанру) — лише за тональним балансом
@@ -182,4 +190,8 @@ private:
     double outLoudE = 0.0, inLoudE = 0.0;
     float tpSince = 0.0f, tickPeak = 0.0f;
     std::array<float, 11> dynSnapshot {};
+    an::Spectrum refSpec {};
+    juce::String refName;
+    float refLufs = -100.0f;
+    bool hasRef = false;
 };

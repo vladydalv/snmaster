@@ -92,8 +92,11 @@ int main()
     for (auto* prm : probe.getParameters())
     {
         auto* r = dynamic_cast<RangedAudioParameter*> (prm);
-        if (r == nullptr || r->getParameterID() == ParamIDs::gainMatch) continue;
+        if (r == nullptr) continue;
         const auto id = r->getParameterID();
+        // Лише для аналізатора/порівняння — на звук не впливають за задумом
+        if (id == ParamIDs::gainMatch || id == ParamIDs::targetGenre || id == ParamIDs::targetDecade
+            || id == ParamIDs::loudTarget || id == ParamIDs::refAB) continue;
         const auto ref = process (mix, [&] (SpacenerdMasterProcessor& p) { context (p, id); });
         const float cur = [&] { SpacenerdMasterProcessor q; context (q, id); return q.apvts.getRawParameterValue (id)->load(); }();
         const float lo = r->convertFrom0to1 (0.0f), hi = r->convertFrom0to1 (1.0f);

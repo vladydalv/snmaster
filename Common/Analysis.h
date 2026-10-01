@@ -235,10 +235,11 @@ inline const char* genreName (int g)
 /** Повний звіт: тональний баланс, гучність, динаміка, стерео. */
 /** loudTargetLufs/loudName: ціль гучності (напр. стрімінг −14 LUFS); якщо не задано — типова гучність епохи. */
 inline Report analyse (const Spectrum& mix, float lufsIntegrated, float truePeakDb, float correlation, float lowSideDb,
-                       float year, int genre, float loudTargetLufs = -100.0f, const char* loudName = nullptr)
+                       float year, int genre, float loudTargetLufs = -100.0f, const char* loudName = nullptr,
+                       const Spectrum* customTarget = nullptr, const juce::String& customName = {})
 {
     Report rep;
-    const auto tgt = normalise (targetCurve (year, genre));
+    const auto tgt = normalise (customTarget != nullptr ? *customTarget : targetCurve (year, genre));
     const auto m = normalise (mix);
     double absSum = 0.0; int n = 0;
     for (int b = 0; b < kBands; ++b)
@@ -287,9 +288,11 @@ inline Report analyse (const Spectrum& mix, float lufsIntegrated, float truePeak
 
     rep.matchPercent = juce::jlimit (0, 100, juce::roundToInt (100.0f - meanAbs * 9.0f - loudPenalty * 4.0f - dynPenalty));
     if (rep.verdicts.empty())
-        rep.verdicts.push_back ({ "Balanced. Sounds like " + juce::String (genreName (genre)) + " " + decadeName (year) + "!", 0 });
+        rep.verdicts.push_back ({ customTarget != nullptr ? "Balanced like your reference (" + customName + ")"
+                                                          : "Balanced. Sounds like " + juce::String (genreName (genre)) + " " + decadeName (year) + "!", 0 });
     else if (rep.matchPercent >= 85)
-        rep.verdicts.insert (rep.verdicts.begin(), { "Close to real " + juce::String (genreName (genre)) + " " + decadeName (year) + ", small tweaks left", 0 });
+        rep.verdicts.insert (rep.verdicts.begin(), { customTarget != nullptr ? "Close to your reference, small tweaks left"
+                                                                             : "Close to real " + juce::String (genreName (genre)) + " " + decadeName (year) + ", small tweaks left", 0 });
     return rep;
 }
 //==============================================================================

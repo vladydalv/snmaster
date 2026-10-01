@@ -48,7 +48,7 @@ private:
 
 //==============================================================================
 /** Сегментний перемикач для choice-параметра (напр. TUBE | TAPE | SOFT). */
-class Segmented final : public juce::Component
+class Segmented final : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     Segmented (APVTS& state, const juce::String& paramId, const juce::String& title = {});
