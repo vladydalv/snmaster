@@ -331,11 +331,7 @@ SpacenerdStompEditor::SpacenerdStompEditor (SpacenerdStompProcessor& p)
     addAndMakeVisible (content);
     setLookAndFeel (&lnf);
     content.setBounds (0, 0, baseW, baseH);
-    setResizable (true, true);
-    setResizeLimits (baseW * 3 / 4, baseH * 3 / 4, baseW * 2, baseH * 2);
-    if (auto* c = getConstrainer())
-        c->setFixedAspectRatio ((double) baseW / (double) baseH);
-    setSize (baseW, baseH);
+    snui::setupEditorSize (*this, p.apvts.state, baseW, baseH);
     startTimerHz (30);
 }
 
@@ -350,4 +346,5 @@ void SpacenerdStompEditor::paint (Graphics& g) { g.fillAll (Theme::bg); }
 void SpacenerdStompEditor::resized()
 {
     content.setTransform (AffineTransform::scale ((float) getWidth() / (float) baseW));
+    snui::rememberEditorScale (static_cast<SpacenerdStompProcessor&> (processor).apvts.state, getWidth(), baseW);
 }

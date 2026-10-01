@@ -395,4 +395,30 @@ void PresetBox::sync()
     if (getSelectedId() != id)
         setSelectedId (id, dontSendNotification);
 }
+//==============================================================================
+void setupEditorSize (AudioProcessorEditor& ed, ValueTree state, int baseW, int baseH)
+{
+    float fit = 1.0f;
+    if (auto* d = Desktop::getInstance().getDisplays().getPrimaryDisplay())
+    {
+        const auto area = d->userArea;
+        fit = std::min (((float) area.getHeight() - 150.0f) / (float) baseH, ((float) area.getWidth() - 60.0f) / (float) baseW);
+    }
+    fit = std::max (0.5f, fit);
+    ed.setResizable (true, true);
+    ed.setResizeLimits (baseW / 2, baseH / 2, roundToInt ((float) baseW * std::max (1.0f, fit)), roundToInt ((float) baseH * std::max (1.0f, fit)));
+    if (auto* c = ed.getConstrainer())
+        c->setFixedAspectRatio ((double) baseW / (double) baseH);
+    float s = (float) state.getProperty ("uiScale", 0.0f);
+    if (s <= 0.0f) s = std::min (1.0f, fit);        // перший раз: не більше екрана
+    s = jlimit (0.5f, fit, s);
+    ed.setSize (roundToInt ((float) baseW * s), roundToInt ((float) baseH * s));
+}
+
+void rememberEditorScale (ValueTree state, int width, int baseW)
+{
+    const float s = (float) width / (float) baseW;
+    if (std::abs ((float) state.getProperty ("uiScale", 0.0f) - s) > 0.005f)
+        state.setProperty ("uiScale", s, nullptr);
+}
 } // namespace snui

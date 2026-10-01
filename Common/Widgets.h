@@ -136,4 +136,9 @@ public:
 private:
     juce::AudioProcessor& proc;
 };
+//==============================================================================
+/** Розмір вікна плагіна: вміщується в екран (із запасом на заголовок хоста), можна тягнути кутом,
+    обраний масштаб запам'ятовується в проєкті. */
+void setupEditorSize (juce::AudioProcessorEditor&, juce::ValueTree state, int baseW, int baseH);
+void rememberEditorScale (juce::ValueTree state, int width, int baseW);
 } // namespace snui

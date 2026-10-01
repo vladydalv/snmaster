@@ -256,11 +256,7 @@ SpacenerdMasterEditor::SpacenerdMasterEditor (SpacenerdMasterProcessor& p)
     setLookAndFeel (&lnf);          // після додавання вмісту, щоб оновились усі нащадки
     content.setBounds (0, 0, baseW, baseH);
 
-    setResizable (true, true);
-    setResizeLimits (baseW * 3 / 4, baseH * 3 / 4, baseW * 2, baseH * 2);
-    if (auto* c = getConstrainer())
-        c->setFixedAspectRatio ((double) baseW / (double) baseH);
-    setSize (baseW, baseH);
+    snui::setupEditorSize (*this, p.apvts.state, baseW, baseH);
 
     startTimerHz (30);
 }
@@ -276,4 +272,5 @@ void SpacenerdMasterEditor::paint (Graphics& g) { g.fillAll (Theme::bg); }
 void SpacenerdMasterEditor::resized()
 {
     content.setTransform (AffineTransform::scale ((float) getWidth() / (float) baseW));
+    snui::rememberEditorScale (static_cast<SpacenerdMasterProcessor&> (processor).apvts.state, getWidth(), baseW);
 }

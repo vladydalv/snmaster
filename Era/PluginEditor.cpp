@@ -416,11 +416,7 @@ SpacenerdEraEditor::SpacenerdEraEditor (SpacenerdEraProcessor& p)
     addAndMakeVisible (content);
     setLookAndFeel (&lnf);
     content.setBounds (0, 0, baseW, baseH);
-    setResizable (true, true);
-    setResizeLimits (baseW * 3 / 4, baseH * 3 / 4, baseW * 2, baseH * 2);
-    if (auto* c = getConstrainer())
-        c->setFixedAspectRatio ((double) baseW / (double) baseH);
-    setSize (baseW, baseH);
+    snui::setupEditorSize (*this, p.apvts.state, baseW, baseH);
     startTimerHz (30);
 }
 
@@ -435,4 +431,5 @@ void SpacenerdEraEditor::paint (Graphics& g) { g.fillAll (Theme::bg); }
 void SpacenerdEraEditor::resized()
 {
     content.setTransform (AffineTransform::scale ((float) getWidth() / (float) baseW));
+    snui::rememberEditorScale (static_cast<SpacenerdEraProcessor&> (processor).apvts.state, getWidth(), baseW);
 }
