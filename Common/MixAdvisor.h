@@ -198,10 +198,10 @@ struct Clash { int a, b; float lo, hi; const char* fix; int cut; };   // cut —
 inline const std::array<Clash, 5>& clashes()
 {
     static const std::array<Clash, 5> c {{
-        { Kick, Bass, 40, 125, "Decide who owns the lowest octave: cut 2-3 dB at %f in one of them, or sidechain the bass to the kick.", Bass },
+        { Kick, Bass, 40, 125, "Decide who owns the lowest octave: cut 2-3 dB at %f in one of them, or put SN Unmask on the bass with the kick as sidechain.", Bass },
         { Bass, Guitar, 100, 315, "High-pass the guitars around 90-120 Hz and cut ~2 dB at %f in the guitars.", Guitar },
-        { Guitar, Vocal, 1000, 4000, "Cut 2-3 dB at %f in the guitars (a dynamic EQ keyed from the vocal is ideal).", Guitar },
-        { Keys, Vocal, 1000, 4000, "Cut 2-3 dB at %f in the keys, or pan them away from the vocal.", Keys },
+        { Guitar, Vocal, 1000, 4000, "Cut 2-3 dB at %f in the guitars or SN Unmask on the guitars keyed from the vocal (cuts only while singing).", Guitar },
+        { Keys, Vocal, 1000, 4000, "Cut 2-3 dB at %f in the keys, pan them away from the vocal, or use SN Unmask keyed from the vocal.", Keys },
         { Keys, Guitar, 250, 2500, "Give each its own range: cut ~2 dB at %f in one, boost it in the other.", Keys } }};
     return c;
 }

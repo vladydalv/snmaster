@@ -90,6 +90,9 @@ sn_add_plugin(SpacenerdStomp Stomp "Spacenerd Stomp" Stmp
 sn_add_plugin(SpacenerdListen Listen "Spacenerd Listen" Lstn
     "Track listener: tells SN Master what's on the track for mix advice" "Fx Analyzer")
 
+sn_add_plugin(SpacenerdUnmask Unmask "Spacenerd Unmask" Unmk
+    "Sidechain dynamic EQ: this track makes room only where and when the key plays" "Fx EQ Dynamics")
+
 # Офлайн-тести DSP (не потрапляють у плагіни)
 option(SN_BUILD_TESTS "Build offline DSP tests" OFF)
 if(SN_BUILD_TESTS)
@@ -114,6 +117,7 @@ if(SN_BUILD_TESTS)
     sn_add_test(StompTest Stomp StompTest.cpp)
     sn_add_test(OctaveAudit Stomp OctaveAudit.cpp)
     sn_add_test(ListenTest Listen ListenTest.cpp)
+    sn_add_test(UnmaskTest Unmask UnmaskTest.cpp)
     file(GLOB master_sources ${CMAKE_CURRENT_SOURCE_DIR}/Master/*.cpp)
     target_sources(ListenTest PRIVATE ${master_sources})
     target_compile_definitions(ListenTest PRIVATE SN_NO_PLUGIN_ENTRY=1)

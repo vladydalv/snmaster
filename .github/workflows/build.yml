@@ -24,7 +24,7 @@ jobs:
       - name: Ad-hoc sign and package
         run: |
           mkdir -p dist
-          for P in "Spacenerd Master:SpacenerdMaster" "Spacenerd Tone:SpacenerdTone" "Spacenerd Feedback:SpacenerdFeedback" "Spacenerd Era:SpacenerdEra" "Spacenerd Stomp:SpacenerdStomp" "Spacenerd Listen:SpacenerdListen"; do
+          for P in "Spacenerd Master:SpacenerdMaster" "Spacenerd Tone:SpacenerdTone" "Spacenerd Feedback:SpacenerdFeedback" "Spacenerd Era:SpacenerdEra" "Spacenerd Stomp:SpacenerdStomp" "Spacenerd Listen:SpacenerdListen" "Spacenerd Unmask:SpacenerdUnmask"; do
             NAME="${P%%:*}"; TARGET="${P##*:}"
             ART="build/${TARGET}_artefacts/Release"
             codesign --force --deep --sign - "$ART/AU/$NAME.component"
@@ -51,3 +51,4 @@ jobs:
           auval -strict -v aufx Erap Spcn
           auval -strict -v aufx Stmp Spcn
           auval -strict -v aufx Lstn Spcn
+          auval -strict -v aufx Unmk Spcn
