@@ -21,6 +21,7 @@ namespace ToneIDs
     inline constexpr auto tapeDrive = "tapeDrive";
     inline constexpr auto tapeSpeed = "tapeSpeed";
     inline constexpr auto tapeWow   = "tapeWow";
+    inline constexpr auto tapeBias  = "tapeBias";
 
     inline constexpr auto excOn     = "excOn";
     inline constexpr auto excFreq   = "excFreq";
@@ -76,6 +77,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createToneLayout()
     l.add (std::make_unique<F> (id (tapeDrive), "Tape Drive", lin (0.0f, 100.0f), 30.0f, pct));
     l.add (std::make_unique<AudioParameterChoice> (id (tapeSpeed), "Tape Speed", StringArray { "7.5", "15", "30" }, 1));
     l.add (std::make_unique<F> (id (tapeWow),   "Wow & Flutter", lin (0.0f, 100.0f), 0.0f, pct));
+    l.add (std::make_unique<F> (id (tapeBias),  "Tape Bias", lin (0.0f, 100.0f), 50.0f, pct));
 
     l.add (std::make_unique<B> (id (excOn), "Exciter On", false));
     l.add (std::make_unique<F> (id (excFreq),   "Exciter Freq",   skew (1500.0f, 12000.0f, 5000.0f), 5000.0f, hz));

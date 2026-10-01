@@ -77,7 +77,7 @@ void ToneOutputPanel::resized()
 ToneContent::ToneContent (SpacenerdToneProcessor& p)
     : presetBox (p),
       tube      (p.apvts, "TUBE",       tubeOn, 3),
-      tape      (p.apvts, "TAPE",       tapeOn, 2),
+      tape      (p.apvts, "TAPE",       tapeOn, 3),
       exciter   (p.apvts, "EXCITER",    excOn,  2),
       transient (p.apvts, "TRANSIENT",  trOn,   2),
       deEss     (p.apvts, "DE-ESSER",   dsOn,   4),
@@ -89,8 +89,9 @@ ToneContent::ToneContent (SpacenerdToneProcessor& p)
     tube.knob (s, tubeBias,  "Bias").help ("tube operating point: higher = more even harmonics, warmer and fatter");
     tube.knob (s, tubeMix,   "Mix").help ("blend with the clean signal");
 
-    tape.add (std::make_unique<Segmented> (s, tapeSpeed, "Speed, ips"), 2, 44);
+    tape.add (std::make_unique<Segmented> (s, tapeSpeed, "Speed, ips"), 3, 44);
     tape.knob (s, tapeDrive, "Drive").help ("tape compression and saturation");
+    tape.knob (s, tapeBias,  "Bias").help ("tape bias: low = under-biased, gritty and broken-up; high = cleaner, softer, darker");
     tape.knob (s, tapeWow,   "Wow / Flutter").help ("pitch drift of a worn tape machine");
 
     exciter.knob (s, excFreq,   "Freq").help ("harmonics are generated above this frequency");

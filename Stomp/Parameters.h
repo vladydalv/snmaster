@@ -102,7 +102,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createStompLayout()
     l.add (std::make_unique<C> (id (wobRate), "Wobble Rate", StringArray { "1/2", "1/4", "1/8", "1/8T", "1/16", "1/32" }, 2));
 
     l.add (std::make_unique<B> (id (modOn), "Mod On", false));
-    l.add (std::make_unique<C> (id (modMode), "Mod Mode", StringArray { "Tremolo", "Harmonic", "Pan", "Vibrato" }, 0));
+    l.add (std::make_unique<C> (id (modMode), "Mod Mode", StringArray { "Tremolo", "Harmonic", "Pan", "Vibrato", "Uni-Vibe" }, 0));
     l.add (std::make_unique<F> (id (rate),  "Rate",  skew (0.3f, 15.0f, 4.0f), 5.0f, hz));
     l.add (std::make_unique<C> (id (modSync),  "Mod Sync", StringArray { "Free", "1/4", "1/8", "1/8T", "1/16" }, 0));
     l.add (std::make_unique<F> (id (depth), "Depth", lin (0.0f, 100.0f), 60.0f, pct));

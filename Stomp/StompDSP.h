@@ -25,20 +25,26 @@ struct CircuitParams
     float postLpHz;
     float sag;                      // чутливість до «сідання» живлення
     float gate;                     // сучасний гейт
+    // Поведінка схем (ElectroSmash-аналізи Tube Screamer / RAT / Big Muff / Fuzz Face):
+    float splitHz, lowFrac;         // частотно-залежне підсилення в каскаді: низи нижче splitHz отримують gain^lowFrac
+                                    // (TS/RAT: баси менше перевантажуються — тугий, не «каша»)
+    float slew;                     // 0…1: обмеження швидкості наростання op-amp (RAT: LM308 ≈ 0.3 В/мкс → «фузовий» верх)
+    float dynBias;                  // 0…1: зсув робочої точки від заряду конденсатора (Fuzz Face: «плювки», розрив хвостів)
+    float interHpHz;                // розділовий фільтр між каскадами (Big Muff ≈ 70 Гц)
 };
 
 inline const std::array<CircuitParams, 5> circuits
 {{
     // '65 Germanium fuzz: товстий, круглий, асиметричний, чутливий до батарейки
-    { 40,  1000, 0, 0.7f, 0,   10, 46, 0.3f, 2.2f, 0.35f, 7000, 700,  1.0f, 0.7f, 4500, 1.0f, 0.0f },
+    { 40,  1000, 0, 0.7f, 0,   10, 46, 0.3f, 2.2f, 0.35f, 7000, 700,  1.0f, 0.7f, 4500, 1.0f, 0.0f,   200, 1.0f, 0.0f, 0.6f, 40 },
     // '70 British drive (напрям Orange): два лампові каскади, щільна середина, «жує»
-    { 70,   900, 5, 0.8f, 2,    0, 34, 1.0f, 2.0f, 0.20f, 6500, 450,  2.0f, 0.7f, 6000, 0.4f, 0.0f },
+    { 70,   900, 5, 0.8f, 2,    0, 34, 1.0f, 2.0f, 0.20f, 6500, 450,  2.0f, 0.7f, 6000, 0.4f, 0.0f,   250, 0.6f, 0.0f, 0.1f, 50 },
     // '73 Triangle fuzz: два каскади діодів, провал середини, безкінечний сустейн
-    { 90,  1000, 0, 0.7f, 0,   20, 56, 1.0f, 3.5f, 0.00f, 5000, 1000, -8.0f, 0.6f, 5500, 0.3f, 0.0f },
+    { 90,  1000, 0, 0.7f, 0,   20, 56, 1.0f, 3.5f, 0.00f, 1600, 1000, -6.5f, 0.6f, 5500, 0.3f, 0.0f,  200, 1.0f, 0.0f, 0.0f, 70 },
     // '81 Op-amp distortion: жорсткий кліп, яскравий вхід, фільтр після
-    { 60,  1500, 2, 0.7f, 6,   12, 52, 0.0f, 8.0f, 0.05f, 9000, 800,  0.0f, 0.7f, 3800, 0.1f, 0.0f },
+    { 60,  1500, 2, 0.7f, 6,   12, 52, 0.0f, 8.0f, 0.05f, 9000, 800,  0.0f, 0.7f, 3800, 0.1f, 0.0f, 1500, 0.5f, 1.0f, 0.0f, 40 },
     // Modern: тугий низ, середина вперед, гейт
-    { 140,  750, 4, 1.0f, 3,   20, 60, 1.0f, 6.0f, 0.00f, 8000, 500, -3.0f, 0.8f, 7000, 0.0f, 0.8f },
+    { 140,  750, 4, 1.0f, 3,   20, 60, 1.0f, 6.0f, 0.00f, 8000, 500, -3.0f, 0.8f, 7000, 0.0f, 0.8f,   720, 0.4f, 0.0f, 0.0f, 90 },
 }};
 
 inline float lerpF (float a, float b, float t) { return a + (b - a) * t; }
@@ -64,6 +70,9 @@ inline CircuitParams morph (float x)
     c.postLpHz = lerpLog (a.postLpHz, b.postLpHz, t);
     c.sag = lerpF (a.sag, b.sag, t);
     c.gate = lerpF (a.gate, b.gate, t);
+    c.splitHz = lerpLog (a.splitHz, b.splitHz, t); c.lowFrac = lerpF (a.lowFrac, b.lowFrac, t);
+    c.slew = lerpF (a.slew, b.slew, t); c.dynBias = lerpF (a.dynBias, b.dynBias, t);
+    c.interHpHz = lerpLog (a.interHpHz, b.interHpHz, t);
     return c;
 }
 
@@ -93,7 +102,7 @@ public:
 
     void reset()
     {
-        for (auto& c : ch) { for (auto& f : c.f) f.reset(); c.env = 0.0f; c.gateG = 1.0f; c.dcX = c.dcY = 0.0f; }
+        for (auto& c : ch) { for (auto& f : c.f) f.reset(); c.split.reset(); c.env = 0.0f; c.gateG = 1.0f; c.dcX = c.dcY = 0.0f; c.slewY = c.cap = 0.0f; }
     }
 
     struct Settings { float circuit, gainPct, tonePct, batteryPct, levelDb; };
@@ -106,10 +115,13 @@ public:
         const float bat = s.batteryPct * 0.01f;
         const float supply = 1.0f - 0.55f * bat;                    // запас по напрузі падає
         const float bias = c.asym + 0.45f * bat;                    // «сіла» батарейка зсуває робочу точку → сплатер
-        const float cb1 = clipShape (bias, c.hardness), cb2 = clipShape (0.5f * bias, c.hardness);
+        const float cb2 = clipLut (0.5f * bias);
         const float norm = lookupNorm (s.circuit, s.gainPct) * sn::dbToGain (s.levelDb);
         const float gateThr = 0.004f * c.gate;
         const float dcR = (float) (1.0 - 2.0 * juce::MathConstants<double>::pi * 10.0 / fs);
+        const float gLow = std::pow (g, c.lowFrac);
+        const float slewRate = c.slew > 0.01f ? (float) (2.83 * 176400.0 / fs) / c.slew : 0.0f;
+        const float capA = 1.0f - (float) std::exp (-1.0 / (0.025 * fs));
 
         for (size_t k = 0; k < block.getNumChannels() && k < ch.size(); ++k)
         {
@@ -134,14 +146,26 @@ public:
 
                 // Просідання живлення від рівня сигналу (германій — найчутливіший)
                 const float level = supply / (1.0f + c.sag * (0.3f + 1.5f * bat) * std::min (1.0f, st.env * g * 0.5f));
-                float u = x * g / level;
-                float y = (clipShape (u + bias, c.hardness) - cb1) * level;
+                // Частотно-залежне підсилення (низи нижче splitHz підсилюються слабше)
+                const float lo = st.split.lowpass (x);
+                float u = (g * (x - lo) + gLow * lo) / level;
+                // Обмеження швидкості наростання й «рейки» живлення підсилювача перед діодами
+                if (slewRate > 0.0f)
+                {
+                    st.slewY += juce::jlimit (-slewRate, slewRate, u - st.slewY);
+                    u = st.slewY;
+                }
+                { const float r = u * (1.0f / 7.5f); u = 7.5f * r / std::sqrt (std::sqrt (1.0f + r * r * r * r)); }
+                // Заряд конденсатора зсуває робочу точку (динамічна асиметрія, «розрив» хвостів)
+                const float bDyn = bias - c.dynBias * 3.0f * st.cap;
+                float y = (clipLut (u + bDyn) - clipLut (bDyn)) * level;
+                st.cap += capA * (y - st.cap);
 
                 if (c.stage2 > 0.001f)
                 {
-                    const float y1 = st.f[3].process (y);        // міжкаскадний завал
+                    const float y1 = st.f[8].process (st.f[3].process (y));   // міжкаскадні фільтри (завал верху + розділовий ФВЧ)
                     const float u2 = y1 * 3.0f / level;
-                    const float y2 = (clipShape (u2 + 0.5f * bias, c.hardness) - cb2) * level;
+                    const float y2 = (clipLut (u2 + 0.5f * bias) - cb2) * level;
                     y = (1.0f - c.stage2) * y + c.stage2 * y2;
                 }
 
@@ -171,7 +195,7 @@ private:
         lastKey = key;
         cur = morph (s.circuit);
         const auto& c = cur;
-        sn::Biquad f[8];
+        sn::Biquad f[9];
         f[0].setHighPass (fs, c.inHpf, 0.707);
         f[1].setPeak (fs, c.preMidHz, c.preMidQ, c.preMidDb);
         f[2].setHighShelf (fs, 1500.0, 0.707, c.preHighDb);
@@ -181,7 +205,17 @@ private:
         const float tilt = s.tonePct * 0.01f * 8.0f;          // ±8 дБ нахил навколо ~800 Гц
         f[6].setLowShelf (fs, 400.0, 0.707, -0.5f * tilt);
         f[7].setHighShelf (fs, 1600.0, 0.707, 0.5f * tilt);
-        for (auto& st : ch) for (int k = 0; k < 8; ++k) st.f[(size_t) k].copyCoeffs (f[k]);
+        f[8].setHighPass (fs, c.interHpHz, 0.707);
+        if (std::abs (c.hardness - lutHardness) > 1.0e-4f)
+        {
+            lutHardness = c.hardness;
+            for (int i = 0; i < kLut; ++i) lut[(size_t) i] = clipShape ((float) i * kLutMax / (float) (kLut - 1), c.hardness);
+        }
+        for (auto& st : ch)
+        {
+            for (int k = 0; k < 9; ++k) st.f[(size_t) k].copyCoeffs (f[k]);
+            st.split.setLowpass (fs, c.splitHz);
+        }
     }
 
     /** Нормування гучності: на -18 dBFS вихід ≈ вхід для кожної схеми/гейну (перемикання не стрибає). */
@@ -230,7 +264,23 @@ private:
         return a + tc * (b - a);
     }
 
-    struct Channel { std::array<sn::Biquad, 8> f; float env = 0.0f, gateG = 1.0f, dcX = 0.0f, dcY = 0.0f; };
+    /** Таблиця кліпера для поточної «жорсткості» (замість pow у кожному семплі). */
+    static constexpr int kLut = 4096;
+    static constexpr float kLutMax = 12.0f;
+    std::array<float, kLut> lut {};
+    float lutHardness = -1.0f;
+    float clipLut (float x) const noexcept
+    {
+        const float ax = std::abs (x);
+        if (ax >= kLutMax) return std::copysign (lut[kLut - 1], x);
+        const float pos = ax * ((float) (kLut - 1) / kLutMax);
+        const int i = (int) pos;
+        const float t = pos - (float) i;
+        const float v = lut[(size_t) i] + t * (lut[(size_t) std::min (i + 1, kLut - 1)] - lut[(size_t) i]);
+        return std::copysign (v, x);
+    }
+
+    struct Channel { std::array<sn::Biquad, 9> f; sn::OnePole split; float env = 0.0f, gateG = 1.0f, dcX = 0.0f, dcY = 0.0f, slewY = 0.0f, cap = 0.0f; };
     std::vector<Channel> ch;
     std::array<std::array<float, 5>, 9> normTable {};
     CircuitParams cur {};
@@ -245,7 +295,7 @@ private:
 class Modulator
 {
 public:
-    enum Mode { tremolo = 0, harmonic, pan, vibrato };
+    enum Mode { tremolo = 0, harmonic, pan, vibrato, univibe };
 
     void prepare (double sampleRate)
     {
@@ -258,12 +308,19 @@ public:
         vsize = size;
         auto c = [this] (double ms) { return (float) std::exp (-1.0 / (0.001 * ms * fs)); };
         fA = c (2.0); fR = c (15.0); sA = c (30.0); sR = c (150.0);
+        // Гармонічне тремоло як у Fender 60-х: ФНЧ ≈144 Гц і ФВЧ ≈636 Гц по 6 дБ/окт (між ними — «дірка» в середині)
+        hlA = (float) std::exp (-juce::MathConstants<double>::twoPi * 144.0 / fs);
+        hhA = (float) std::exp (-juce::MathConstants<double>::twoPi * 636.0 / fs);
+        lampAtk = c (12.0); lampRel = c (45.0);
         reset();
     }
 
     void reset()
     {
         phase = 0.0; riseEnv = 1.0f; envF = envS = 0.0f; split.reset(); vpos = 0; depthSm = 0.0f;
+        for (auto& h : hst) h = {};
+        for (auto& u : uv) u = {};
+        lamp = 1.0f;
         for (auto& b : vbuf) std::fill (b.begin(), b.end(), 0.0f);
     }
 
@@ -315,9 +372,42 @@ public:
                     const float gl = 1.0f - d * (0.5f - 0.5f * lfo), gh = 1.0f - d * (0.5f + 0.5f * lfo);
                     for (int c = 0; c < numCh; ++c)
                     {
-                        float lo, hi;
-                        split.processSample (c, data[c][i], lo, hi);
-                        data[c][i] = lo * gl + hi * gh;
+                        auto& h = hst[(size_t) c];
+                        const float x = data[c][i];
+                        h.lp = x + hlA * (h.lp - x);                        // 144 Гц
+                        h.hpLp = x + hhA * (h.hpLp - x);
+                        const float hi = x - h.hpLp;                       // 636 Гц
+                        data[c][i] = 1.6f * (h.lp * gl + hi * gh);           // компенсація «дірки» на середині
+                    }
+                    break;
+                }
+                case univibe:
+                {
+                    // Uni-Vibe: лампа (асиметрична інерція) освітлює фоторезистори 4 фазових каскадів
+                    // (C = 15 нФ, 220 нФ, 470 пФ, 4.7 нФ); вихід — сухий + фазований = «пульсуюча» психоделія
+                    const float target = 1.0f - d * (0.5f - 0.5f * lfo);
+                    lamp = target + (target > lamp ? lampAtk : lampRel) * (lamp - target);
+                    if ((i & 7) == 0)
+                    {
+                        const float R = 12000.0f * std::pow (std::max (0.02f, lamp), -1.4f);   // світло → опір (≈12 кОм … 2 МОм)
+                        static constexpr float C[4] { 15.0e-9f, 220.0e-9f, 470.0e-12f, 4.7e-9f };
+                        for (int k = 0; k < 4; ++k)
+                        {
+                            const float fc = juce::jlimit (5.0f, (float) (0.45 * fs), 1.0f / (juce::MathConstants<float>::twoPi * R * C[k]));
+                            const float t = std::tan (juce::MathConstants<float>::pi * fc / (float) fs);
+                            uvA[k] = (t - 1.0f) / (t + 1.0f);
+                        }
+                    }
+                    for (int c = 0; c < numCh; ++c)
+                    {
+                        auto& u = uv[(size_t) c];
+                        float y = data[c][i];
+                        for (int k = 0; k < 4; ++k)
+                        {
+                            const float o = uvA[k] * y + u.x[k] - uvA[k] * u.y[k];
+                            u.x[k] = y; u.y[k] = o; y = o;
+                        }
+                        data[c][i] = 0.5f * (data[c][i] + y) * 1.3f;
                     }
                     break;
                 }
@@ -370,6 +460,13 @@ private:
     std::vector<std::vector<float>> vbuf;
     int vsize = 1, vpos = 0;
     float fA = 0, fR = 0, sA = 0, sR = 0, envF = 0, envS = 0, riseEnv = 1.0f, depthSm = 0.0f, lastLfo = 0.0f;
+    struct HarmState { float lp = 0.0f, hpLp = 0.0f; };
+    std::array<HarmState, 2> hst {};
+    float hlA = 0.0f, hhA = 0.0f;
+    struct UvState { std::array<float, 4> x {}, y {}; };
+    std::array<UvState, 2> uv {};
+    std::array<float, 4> uvA {};
+    float lamp = 1.0f, lampAtk = 0.0f, lampRel = 0.0f;
 };
 
 //==============================================================================

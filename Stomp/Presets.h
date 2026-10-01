@@ -32,6 +32,8 @@ inline const std::vector<StompPreset>& getStompPresets()
         { "Psych Harmonic Vibe",         { { circuit, 0.5f }, { gain, 50 },
                                            { modOn, 1 }, { modMode, 1 }, { rate, 4.0f }, { depth, 75 }, { shape, 10 },
                                            { echoOn, 1 }, { echoTime, 420 }, { feedback, 40 }, { echoMix, 25 }, { wear, 50 } } },
+        { "Uni-Vibe Throb",              { { driveOn, 0 }, { modOn, 1 }, { modMode, 4 }, { rate, 3.5f }, { depth, 85 } } },
+        { "Machine Gun Vibe Fuzz",       { { circuit, 0.0f }, { gain, 80 }, { modOn, 1 }, { modMode, 4 }, { rate, 6.0f }, { depth, 90 } } },
         { "Singer Vibrato (Rise)",       { { driveOn, 0 }, { modOn, 1 }, { modMode, 3 }, { rate, 5.5f }, { depth, 45 }, { rise, 600 } } },
         { "Space Echo Fuzz",             { { circuit, 2.5f }, { gain, 70 },
                                            { echoOn, 1 }, { echoSync, 2 }, { feedback, 60 }, { echoTone, 2500 }, { echoMix, 35 }, { wear, 45 } } },

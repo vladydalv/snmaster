@@ -149,7 +149,7 @@ void SpacenerdToneProcessor::processChunk (juce::AudioBuffer<float>& buffer)
         sn::runFaded (tapeMixF, on (tapeOn), os, numCh, on_, step, scratch, [&] (bool fresh)
         {
             if (fresh) tape.reset();
-            tape.process (up, tapeDriveSm, (int) p (tapeSpeed), 1.0f);
+            tape.process (up, tapeDriveSm, (int) p (tapeSpeed), 1.0f, p (tapeBias));
         });
         sn::runFaded (excMixF, on (excOn), os, numCh, on_, step, scratch, [&] (bool)
         {

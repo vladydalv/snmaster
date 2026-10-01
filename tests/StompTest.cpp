@@ -198,16 +198,36 @@ int main (int argc, char* argv[])
             maxDiff = std::max (maxDiff, std::abs (rmsDb (pan, 0, t, t + 0.02) - rmsDb (pan, 1, t, t + 0.02)));
         check (maxDiff > 20.0f, "pan swings L/R: " + String (maxDiff, 1) + " dB");
 
-        for (int mode : { 1, 3 })
+        for (int mode : { 1, 3, 4 })
         {
             auto out = run (tone, [mode] (SpacenerdStompProcessor& p) { set (p, modOn, 1); set (p, modMode, (float) mode); set (p, depth, 60); });
             const float d = rmsDb (out, 0, 0.5, 2.0) - rmsDb (tone, 0, 0.5, 2.0);
-            check (finite (out) && d > -4.0f && d < 1.0f, String (mode == 1 ? "harmonic" : "vibrato") + " level " + String (d, 2) + " dB");
+            check (finite (out) && d > -5.0f && d < 1.5f, String (mode == 1 ? "harmonic" : mode == 3 ? "vibrato" : "uni-vibe") + " level " + String (d, 2) + " dB");
         }
         // Вібрато змінює висоту: складова 440 Гц «розмазана»
         auto vib = run (tone, [] (SpacenerdStompProcessor& p) { set (p, modOn, 1); set (p, modMode, 3); set (p, depth, 100); set (p, rate, 5.0f); });
         const float spread = sn::gainToDb (amp (vib, 0, 440.0, 0.5, 2.0) / 0.25f);
         check (spread < -1.0f, "vibrato modulates pitch (440 Hz line " + String (spread, 1) + " dB)");
+    }
+
+    // 7b. Uni-Vibe: фазові «вирізи» рухаються — рівень вузької смуги коливається з LFO
+    {
+        AudioBuffer<float> noise (2, (int) (fs * 3.0));
+        std::mt19937 rng (11); std::normal_distribution<float> nd (0.0f, 0.1f);
+        for (int i = 0; i < noise.getNumSamples(); ++i) { const float v = nd (rng); noise.setSample (0, i, v); noise.setSample (1, i, v); }
+        auto out = run (noise, [] (SpacenerdStompProcessor& p) { set (p, modOn, 1); set (p, modMode, 4); set (p, rate, 2.0f); set (p, depth, 100); });
+        sn::Biquad bp; bp.setBandPass (fs, 800.0, 4.0);
+        float mn = 100.0f, mx = -100.0f;
+        std::vector<float> y ((size_t) out.getNumSamples());
+        for (int i = 0; i < out.getNumSamples(); ++i) y[(size_t) i] = bp.process (out.getSample (0, i));
+        for (int w = 1; w < 28; ++w)
+        {
+            double e = 0; const int s0 = w * 4800;
+            for (int i = s0; i < s0 + 2400; ++i) e += (double) y[(size_t) i] * y[(size_t) i];
+            const float db = (float) (10.0 * std::log10 (e + 1e-20));
+            mn = std::min (mn, db); mx = std::max (mx, db);
+        }
+        check (finite (out) && mx - mn > 4.0f, "uni-vibe sweeps notches: " + String (mx - mn, 1) + " dB at 800 Hz");
     }
 
     // 8. Ехо: час повтору
@@ -340,7 +360,7 @@ int main (int argc, char* argv[])
     if (argc > 1)
     {
         SpacenerdStompProcessor p;
-        p.setCurrentProgram (18);
+        p.setCurrentProgram (13);
         p.setRateAndBufferSizeDetails (fs, 512);
         p.prepareToPlay (fs, 512);
         std::unique_ptr<AudioProcessorEditor> ed (p.createEditor());

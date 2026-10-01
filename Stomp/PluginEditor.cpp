@@ -239,7 +239,7 @@ StompContent::StompContent (SpacenerdStompProcessor& p)
       pad (p),
       drive   (p.apvts, "DRIVE", driveOn, 3),
       octSec  (p.apvts, "OCTAVE", octOn, 9),
-      modSec  (p.apvts, "MODULATION", modOn, 8),
+      modSec  (p.apvts, "MODULATION", modOn, 7),
       echoSec (p.apvts, "TAPE ECHO", echoOn, 5),
       output (p)
 {
@@ -269,13 +269,13 @@ StompContent::StompContent (SpacenerdStompProcessor& p)
     octSec.knob (s, detune, "Detune").help ("Spectral engine: two slightly detuned copies of +1/+2 for a 12-string / organ width");
     octSec.knob (s, wobble, "Wobble").help ("resonant filter on the octaves moving in tempo (see Wobble Rate)");
 
-    // 8 колонок: режими ширші (назви не обрізаються), ручки — по 2 колонки
-    modSec.add (std::make_unique<Segmented> (s, modMode, "Mode"), 5, 44);
+    // Режими — на всю ширину (назви не обрізаються); Sync — поруч із ручками
+    modSec.add (std::make_unique<Segmented> (s, modMode, "Mode"), 7, 44);
     modSec.add (std::make_unique<Segmented> (s, modSync, "Sync"), 3, 44);
-    modSec.add (std::make_unique<Knob> (s, rate, "Rate"), 2);
-    modSec.add (std::make_unique<Knob> (s, depth, "Depth"), 2);
-    { auto k = std::make_unique<Knob> (s, shape, "Shape"); k->help ("smooth sine to choppy square"); modSec.add (std::move (k), 2); }
-    { auto k = std::make_unique<Knob> (s, rise, "Rise"); k->help ("modulation fades in after each note, like a singer's vibrato"); modSec.add (std::move (k), 2); }
+    modSec.add (std::make_unique<Knob> (s, rate, "Rate"), 1);
+    modSec.add (std::make_unique<Knob> (s, depth, "Depth"), 1);
+    { auto k = std::make_unique<Knob> (s, shape, "Shape"); k->help ("smooth sine to choppy square"); modSec.add (std::move (k), 1); }
+    { auto k = std::make_unique<Knob> (s, rise, "Rise"); k->help ("modulation fades in after each note, like a singer's vibrato"); modSec.add (std::move (k), 1); }
 
     echoSec.add (std::make_unique<Segmented> (s, echoSync, "Sync"), 5, 44);
     echoSec.knob (s, echoTime, "Time");
