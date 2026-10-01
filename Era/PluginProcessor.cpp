@@ -248,7 +248,10 @@ void SpacenerdEraProcessor::processChunk (juce::AudioBuffer<float>& buffer)
         yearLowSm.setCurrentAndTargetValue (p (yearLow));
         yearHighSm.setCurrentAndTargetValue (p (yearHigh));
     }
-    if (! curValid) { cur = target; curValid = true; updateFilters (cur, true); }
+    if (! curValid) { cur = target; curValid = true; updateFilters (cur, true); speedSm = (float) target.tapeSpeed; }
+    // Швидкість стрічки ковзає (~0.3 с), а не перемикається стрибком — без клацань
+    speedSm += ((float) target.tapeSpeed - speedSm) * std::min (1.0f, (float) n / (float) (0.1 * getSampleRate()));
+    if (std::abs ((float) target.tapeSpeed - speedSm) < 0.002f) speedSm = (float) target.tapeSpeed;
 
     // --- 4x: EQ → компресор → лампа → плівка → кліп
     {
@@ -284,7 +287,7 @@ void SpacenerdEraProcessor::processChunk (juce::AudioBuffer<float>& buffer)
             compGr.push (comp.process (osData, numCh, on, cs));
         }
         if (cur.tube > 0.5f) tube.process (up, cur.tube, 35.0f, 1.0f);
-        if (cur.tape > 0.5f) tape.process (up, cur.tape, cur.tapeSpeed, 1.0f);
+        if (cur.tape > 0.5f) tape.process (up, cur.tape, speedSm, 1.0f);
         if (cur.clip > 0.5f) SoftClip::process (up, cur.clip, 1.0f, 0.5f);
 
         oversampler->processSamplesDown (block);

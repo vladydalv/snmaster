@@ -222,7 +222,7 @@ public:
         ch.assign ((size_t) numChannels, {});
         for (auto& c : ch) c.h.prepare (fs);
         calibrate();
-        lastSpeed = -1;
+        lastSpeed = -1.0f;
         reset();
     }
 
@@ -232,9 +232,9 @@ public:
     }
 
     /** biasPct: 50 = номінал; нижче — недопідмагнічено (брудніше), вище — чистіше й м'якше. */
-    void process (juce::dsp::AudioBlock<float>& block, float drivePct, int speed, float mix, float biasPct = 50.0f)
+    void process (juce::dsp::AudioBlock<float>& block, float drivePct, float speed, float mix, float biasPct = 50.0f)
     {
-        if (speed != lastSpeed) { updateEq (speed); lastSpeed = speed; }
+        if (std::abs (speed - lastSpeed) > 0.005f) { updateEq (speed); lastSpeed = speed; }   // швидкість може плавно ковзати
         if (std::abs (biasPct - lastBias) > 0.05f)
         {
             lastBias = biasPct;
@@ -303,11 +303,17 @@ private:
             }
     }
 
-    void updateEq (int speed)
+    void updateEq (float speed)
     {
         struct V { float bumpHz, bumpDb, lpHz, emphDb; };
         static constexpr V v[] { { 45.0f, 2.5f, 11000.0f, 6.0f }, { 65.0f, 2.0f, 17000.0f, 4.5f }, { 110.0f, 1.5f, 24000.0f, 3.0f } };
-        const auto& s = v[juce::jlimit (0, 2, speed)];
+        // 0 = 7.5, 1 = 15, 2 = 30 ips; дробові значення — проміжні (для плавного переходу)
+        const float sp = juce::jlimit (0.0f, 2.0f, speed);
+        const int i0 = std::min (1, (int) sp);
+        const float t = sp - (float) i0;
+        const auto& a = v[i0]; const auto& b = v[i0 + 1];
+        const auto lerpLog = [t] (float x, float y) { return x * std::pow (y / x, t); };
+        const V s { lerpLog (a.bumpHz, b.bumpHz), a.bumpDb + t * (b.bumpDb - a.bumpDb), lerpLog (a.lpHz, b.lpHz), a.emphDb + t * (b.emphDb - a.emphDb) };
 
         Biquad bump, dip, lp, pre, post;
         bump.setPeak (fs, s.bumpHz, 1.2, s.bumpDb);
@@ -328,7 +334,7 @@ private:
     float lastBias = -1.0f;
     float ref = 0.125892541f;
     double fs = 176400.0;
-    int lastSpeed = -1;
+    float lastSpeed = -1.0f;
 };
 
 //==============================================================================

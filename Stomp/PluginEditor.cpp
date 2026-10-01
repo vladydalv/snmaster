@@ -237,7 +237,7 @@ StompContent::StompContent (SpacenerdStompProcessor& p)
     : proc (p),
       presetBox (p),
       pad (p),
-      drive   (p.apvts, "DRIVE", driveOn, 3),
+      drive   (p.apvts, "DRIVE", driveOn, 4),
       octSec  (p.apvts, "OCTAVE", octOn, 9),
       modSec  (p.apvts, "MODULATION", modOn, 7),
       echoSec (p.apvts, "TAPE ECHO", echoOn, 5),
@@ -248,6 +248,7 @@ StompContent::StompContent (SpacenerdStompProcessor& p)
     drive.knob (s, circuit, "Circuit").help ("morphs smoothly between pedal circuits of different eras (same as left-right on the display)");
     drive.knob (s, gain, "Gain").help ("amount of drive/fuzz (same as up-down on the display)");
     drive.knob (s, tone, "Tone", true).help ("- = darker, + = brighter");
+    drive.knob (s, guitarVol, "Guitar Vol").help ("your guitar's volume knob in front of the pedal: roll back to clean up the fuzz (strongest on '65 Germanium)");
     drive.knob (s, battery, "Battery").help ("a dying 9V battery: sag, splatter, note tails break up");
     drive.knob (s, cleanBass, "Clean Bass").help ("lows below this frequency bypass the drive (for bass: fuzz on top, solid clean low end)");
     drive.knob (s, level, "Level", true).help ("pedal output level");

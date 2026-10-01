@@ -12,6 +12,7 @@ namespace StompIDs
     inline constexpr auto battery   = "battery";
     inline constexpr auto cleanBass = "cleanBass";  // Hz, мін = Off
     inline constexpr auto level     = "level";
+    inline constexpr auto guitarVol = "guitarVol";  // ручка гучності гітари перед педаллю
     // Octave
     inline constexpr auto octOn     = "octOn";
     inline constexpr auto octPos    = "octPos";     // Pre / Post (до чи після драйву)
@@ -82,6 +83,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createStompLayout()
     l.add (std::make_unique<F> (id (gain),    "Gain",    lin (0.0f, 100.0f), 60.0f, pct));
     l.add (std::make_unique<F> (id (tone),    "Tone",    lin (-100.0f, 100.0f), 0.0f, sgn));
     l.add (std::make_unique<F> (id (battery), "Battery", lin (0.0f, 100.0f), 0.0f, pct));
+    l.add (std::make_unique<F> (id (guitarVol), "Guitar Volume", lin (0.0f, 100.0f), 100.0f, pct));
     l.add (std::make_unique<F> (id (cleanBass), "Clean Bass", skew (40.0f, 400.0f, 120.0f), 40.0f, bassText));
     l.add (std::make_unique<F> (id (level),   "Level",   lin (-24.0f, 12.0f), 0.0f, dB));
 

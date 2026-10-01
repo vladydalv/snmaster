@@ -268,7 +268,7 @@ void EraContent::loadReference (const File& file)
     const int genreIdx = (int) proc.apvts.getRawParameterValue (genre)->load();
     Component::SafePointer<EraContent> safe (this);
 
-    Thread::launch ([safe, file, genreIdx]
+    proc.refPool.addJob ([safe, file, genreIdx]
     {
         AudioFormatManager fm;
         fm.registerBasicFormats();

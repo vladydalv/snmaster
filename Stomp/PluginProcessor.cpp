@@ -171,7 +171,7 @@ void SpacenerdStompProcessor::processChunk (juce::AudioBuffer<float>& buffer)
     // Цілі
     const bool driveActive = on (driveOn);
     const float bassHz = p (cleanBass);
-    const st::Pedal::Settings target { p (circuit), p (gain), p (tone), p (battery), p (level) };
+    const st::Pedal::Settings target { p (circuit), p (gain), p (tone), p (battery), p (level), p (guitarVol) };
     const float bassT = driveActive && bassHz >= 45.0f ? 1.0f : 0.0f;
     const float driveT = driveActive ? 1.0f : 0.0f;
     if (first) { sm = target; bassMix = bassT; driveMix = driveT; first = false; }
@@ -222,6 +222,7 @@ void SpacenerdStompProcessor::processChunk (juce::AudioBuffer<float>& buffer)
                 smooth (sm.tonePct, target.tonePct, 0.05f);
                 smooth (sm.batteryPct, target.batteryPct, 0.05f);
                 smooth (sm.levelDb, target.levelDb, 0.01f);
+                smooth (sm.guitarVolPct, target.guitarVolPct, 0.05f);
 
                 const float d0 = driveMix;
                 smooth (driveMix, driveT, 0.001f);

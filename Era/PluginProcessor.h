@@ -10,7 +10,7 @@ class SpacenerdEraProcessor final : public juce::AudioProcessor
 {
 public:
     SpacenerdEraProcessor();
-    ~SpacenerdEraProcessor() override = default;
+    ~SpacenerdEraProcessor() override { refPool.removeAllJobs (true, 10000); }   // фонова задача не переживе плагін
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -21,7 +21,7 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "Spacenerd Era"; }
+    const juce::String getName() const override { return "SN Era"; }
     bool acceptsMidi() const override  { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
@@ -36,6 +36,7 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    juce::ThreadPool refPool { 1 };   // аналіз референсу (Reference Match)
     juce::AudioProcessorValueTreeState apvts;
 
     // Для інтерфейсу
@@ -59,6 +60,7 @@ private:
     static constexpr int kOsOrder = 2;
 
     era::Settings cur {};
+    float speedSm = 1.0f;
     bool curValid = false;
 
     std::array<std::array<sn::Biquad, 5>, 2> eq;           // low cut, low shelf, mid, high shelf, top LP

@@ -113,6 +113,21 @@ int main (int argc, char* argv[])
         std::cout << "  " << levels << std::endl;
     }
 
+    // 1b. Guitar Vol на '65 Germanium: прикручена ручка чистить фузз
+    {
+        const auto thdAt = [&] (float vol)
+        {
+            const auto g = sine ({ { 220.0, 0.35f } }, 1.0);   // гарячий звукознімач
+            auto out = run (g, [vol] (SpacenerdStompProcessor& p) { set (p, driveOn, 1); set (p, circuit, 0.0f); set (p, gain, 85); set (p, guitarVol, vol); });
+            const float fund = amp (out, 0, 220.0, 0.5, 1.0);
+            const float tot = out.getRMSLevel (0, (int) (0.5 * fs), (int) (0.5 * fs));
+            return std::sqrt (std::max (0.0f, tot * tot - 0.5f * fund * fund)) / (fund * 0.70710678f);
+        };
+        const float full = thdAt (100.0f), half = thdAt (60.0f);
+        std::cout << "  guitar vol THD: 80% " << thdAt (80.0f) * 100.0f << "  40% " << thdAt (40.0f) * 100.0f << std::endl;
+        check (half < 0.5f * full, "Guitar Vol cleans the germanium fuzz: THD " + String (full * 100.0f, 0) + "% -> " + String (half * 100.0f, 0) + "% at 60 %");
+    }
+
     // 2. Морф: без стрибків гучності між сусідніми точками
     {
         float prev = 0.0f, worst = 0.0f;

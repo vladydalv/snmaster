@@ -102,26 +102,35 @@ public:
 
     void reset()
     {
-        for (auto& c : ch) { for (auto& f : c.f) f.reset(); c.split.reset(); c.env = 0.0f; c.gateG = 1.0f; c.dcX = c.dcY = 0.0f; c.slewY = c.cap = 0.0f; }
+        for (auto& c : ch) { for (auto& f : c.f) f.reset(); c.split.reset(); c.env = 0.0f; c.gateG = 1.0f; c.dcX = c.dcY = 0.0f; c.slewY = c.cap = c.volLp = 0.0f; }
     }
 
-    struct Settings { float circuit, gainPct, tonePct, batteryPct, levelDb; };
+    struct Settings { float circuit, gainPct, tonePct, batteryPct, levelDb, guitarVolPct = 100.0f; };
 
     void process (juce::dsp::AudioBlock<float>& block, const Settings& s)
     {
         updateFilters (s);
         const auto& c = cur;
-        const float g = sn::dbToGain (lerpF (c.gainMinDb, c.gainMaxDb, s.gainPct * 0.01f));
+        // Гучність гітари: у фуззі на германії ручка гітари стоїть послідовно з низьким вхідним опором
+        // транзистора — падає не лише рівень, а й підсилення каскаду, тож звук чиститься до «скляного».
+        const float gv = 1.0f - juce::jlimit (0.0f, 100.0f, s.guitarVolPct) * 0.01f;
+        const float germ = juce::jlimit (0.0f, 1.0f, 1.0f - s.circuit);
+        const float gCutDb = gv * germ * 60.0f;
+        const float g = sn::dbToGain (lerpF (c.gainMinDb, c.gainMaxDb, s.gainPct * 0.01f) - gCutDb);
         const float bat = s.batteryPct * 0.01f;
         const float supply = 1.0f - 0.55f * bat;                    // запас по напрузі падає
         const float bias = c.asym + 0.45f * bat;                    // «сіла» батарейка зсуває робочу точку → сплатер
         const float cb2 = clipLut (0.5f * bias);
-        const float norm = lookupNorm (s.circuit, s.gainPct) * sn::dbToGain (s.levelDb);
+        const float norm = lookupNorm (s.circuit, s.gainPct) * sn::dbToGain (s.levelDb + 0.2f * gCutDb);   // частково: прикручена гітара звучить тихіше, як у житті
         const float gateThr = 0.004f * c.gate;
         const float dcR = (float) (1.0 - 2.0 * juce::MathConstants<double>::pi * 10.0 / fs);
         const float gLow = std::pow (g, c.lowFrac);
         const float slewRate = c.slew > 0.01f ? (float) (2.83 * 176400.0 / fs) / c.slew : 0.0f;
         const float capA = 1.0f - (float) std::exp (-1.0 / (0.025 * fs));
+        // Інші схеми — просто тихіший вхід; верх трохи лишається (як із ручкою гітари)
+        const float volIn = sn::dbToGain (-gv * (20.0f + 10.0f * germ));
+        const float bright = gv * (0.4f + 1.2f * germ);
+        const float brightA = 1.0f - (float) std::exp (-2.0 * juce::MathConstants<double>::pi * 1200.0 / fs);
 
         for (size_t k = 0; k < block.getNumChannels() && k < ch.size(); ++k)
         {
@@ -133,6 +142,11 @@ public:
                 x = st.f[0].process (x);               // вхідний HPF
                 x = st.f[1].process (x);               // pre mid
                 x = st.f[2].process (x);               // pre high shelf
+                if (gv > 0.0f)
+                {
+                    st.volLp += brightA * (x - st.volLp);
+                    x = volIn * (x + bright * (x - st.volLp));
+                }
 
                 const float ax = std::abs (x);
                 st.env = ax > st.env ? ax + envAtk * (st.env - ax) : ax + envRel * (st.env - ax);
@@ -280,7 +294,7 @@ private:
         return std::copysign (v, x);
     }
 
-    struct Channel { std::array<sn::Biquad, 9> f; sn::OnePole split; float env = 0.0f, gateG = 1.0f, dcX = 0.0f, dcY = 0.0f, slewY = 0.0f, cap = 0.0f; };
+    struct Channel { std::array<sn::Biquad, 9> f; sn::OnePole split; float env = 0.0f, gateG = 1.0f, dcX = 0.0f, dcY = 0.0f, slewY = 0.0f, cap = 0.0f, volLp = 0.0f; };
     std::vector<Channel> ch;
     std::array<std::array<float, 5>, 9> normTable {};
     CircuitParams cur {};

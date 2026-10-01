@@ -33,10 +33,12 @@ set(SN_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/Common/Widgets.cpp)
 
 # sn_add_plugin(<target> <folder> <name> <plugin code> <description> <vst3 categories>)
 function(sn_add_plugin target folder name code description categories)
+    # Коротка назва для слота в DAW ("SN Master"); файл бандла лишається "Spacenerd Master"
+    string(REPLACE "Spacenerd " "SN " short_name "${name}")
     juce_add_plugin(${target}
         COMPANY_NAME             "Spacenerd"
         BUNDLE_ID                "space.spacenerd.${folder}"
-        PLUGIN_NAME              "${name}"
+        PLUGIN_NAME              "${short_name}"
         PRODUCT_NAME             "${name}"
         DESCRIPTION              "${description}"
         PLUGIN_MANUFACTURER_CODE Spcn
