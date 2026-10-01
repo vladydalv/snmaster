@@ -74,6 +74,7 @@ void SpacenerdMasterProcessor::prepareToPlay (double sampleRate, int samplesPerB
     // Lookahead 4 мс: менше спотворень на басу, ніж у коротких лімітерах
     const int lookahead = std::max (4, (int) std::round (0.004 * fs));
     limiter.prepare (fs, numCh, lookahead, detectorDelay);
+    limiter.setLowFreqAware (true);
 
     setLatencySamples ((int) std::round (oversampler->getLatencyInSamples()) + limiter.getLatency());
 

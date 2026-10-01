@@ -115,7 +115,12 @@ public:
         L = std::max (1, lookaheadSamples);
         totalDelay = std::max (0, detectorDelay) + L;
         minFilter.prepare (L);
-        box.assign ((size_t) L, 1.0);
+        // Два каскадні коробкові фільтри (L/2 + L/2): трикутна, а не лінійна форма спаду підсилення —
+        // менше гармонік від самої роботи лімітера (Signalsmith). Утримання L ≥ сумарної довжини — піки не проскакують.
+        B1 = std::max (1, L / 2); B2 = std::max (1, L - B1);
+        box.assign ((size_t) B1, 1.0); box2.assign ((size_t) B2, 1.0);
+        lfA = (float) std::exp (-2.0 * juce::MathConstants<double>::pi * 150.0 / fs);
+        lfSlow = (float) std::exp (-1.0 / (0.3 * fs));
         delay.assign ((size_t) numChannels, std::vector<float> ((size_t) totalDelay + 1, 0.0f));
         reset();
     }
@@ -124,7 +129,9 @@ public:
     {
         minFilter.reset();
         std::fill (box.begin(), box.end(), 1.0);
-        boxSum = (double) L;
+        std::fill (box2.begin(), box2.end(), 1.0);
+        boxSum = (double) B1; boxSum2 = (double) B2; boxPos2 = 0;
+        lfLp = 0.0f; lfE = 0.0f; fullE = 1.0e-9f;
         for (auto& d : delay) std::fill (d.begin(), d.end(), 0.0f);
         pos = boxPos = 0;
         p1 = p2 = 0.0f;
@@ -132,6 +139,8 @@ public:
     }
 
     int getLatency() const noexcept { return totalDelay; }
+    /** Повільніший реліз на басу (прозоріше; для «війни гучності» вимкнути). */
+    void setLowFreqAware (bool on) noexcept { lfAware = on; }
 
     /** peaks[i] — пік (true peak) для семпла i, затриманий на detectorDelay.
         Повертає мінімальне підсилення (лінійне) за блок. */
@@ -139,7 +148,9 @@ public:
     float process (float* const* data, int numCh, int n, const float* peaks,
                    float ceilingLin, float releaseMs, float mix0, float mix1)
     {
-        const float relCoef = std::exp (-1.0f / (0.001f * releaseMs * (float) fs));
+        // Частотно-залежний реліз (як x42): на щільному басу відпускаємо повільніше — лімітер не «малює» хвилю баса
+        const float lfRatio = lfAware ? std::min (1.0f, lfE / std::max (fullE, 1.0e-12f)) : 0.0f;
+        const float relCoef = std::exp (-1.0f / (0.001f * releaseMs * (1.0f + 2.0f * lfRatio) * (float) fs));
         const float slowAtk = std::exp (-1.0f / (0.040f * (float) fs));
         const float slowRel = std::exp (-1.0f / (0.001f * 8.0f * releaseMs * (float) fs));
         const int size = totalDelay + 1;
@@ -155,8 +166,20 @@ public:
             const float h = minFilter.push (req);
             boxSum += (double) h - box[(size_t) boxPos];
             box[(size_t) boxPos] = h;
-            boxPos = (boxPos + 1) % L;
-            const float s = std::min (1.0f, (float) (boxSum / (double) L));
+            boxPos = (boxPos + 1) % B1;
+            const double s1 = boxSum / (double) B1;
+            boxSum2 += s1 - box2[(size_t) boxPos2];
+            box2[(size_t) boxPos2] = s1;
+            boxPos2 = (boxPos2 + 1) % B2;
+            const float s = std::min (1.0f, (float) (boxSum2 / (double) B2));
+
+            // Енергія басу vs уся (для частотно-залежного релізу)
+            {
+                const float m = numCh > 1 ? 0.5f * (data[0][i] + data[1][i]) : data[0][i];
+                lfLp = m + lfA * (lfLp - m);
+                lfE = lfLp * lfLp + lfSlow * (lfE - lfLp * lfLp);
+                fullE = m * m + lfSlow * (fullE - m * m);
+            }
 
             g = (s < g) ? s : s + (g - s) * relCoef;
             // Повільна стадія: тримає середнє обмеження на щільному матеріалі (менше пампінгу й спотворень басу)
@@ -183,8 +206,11 @@ private:
     int L = 1, totalDelay = 1, pos = 0, boxPos = 0;
     float g = 1.0f, gs = 1.0f, p1 = 0.0f, p2 = 0.0f;
     SlidingMin minFilter;
-    std::vector<double> box;
-    double boxSum = 1.0;
+    std::vector<double> box, box2;
+    double boxSum = 1.0, boxSum2 = 1.0;
+    int B1 = 1, B2 = 1, boxPos2 = 0;
+    bool lfAware = false;
+    float lfA = 0.0f, lfSlow = 0.0f, lfLp = 0.0f, lfE = 0.0f, fullE = 1.0e-9f;
     std::vector<std::vector<float>> delay;
 };
 
