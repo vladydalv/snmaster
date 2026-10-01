@@ -157,6 +157,35 @@ static AudioBuffer<float> makeOverheads (double sec, uint32 seed)
     return b;
 }
 
+/** Уся установка: бочка на 1 і 3, малий на 2 і 4, хай-хет вісімками (120 BPM). */
+static AudioBuffer<float> makeKit (double sec, uint32 seed, float kickG, float snareG, float hatG)
+{
+    AudioBuffer<float> b (2, (int) (sec * fs)); b.clear();
+    Random rnd ((int64) seed);
+    sn::Biquad hpS, hpH; hpS.setHighPass (fs, 1000.0); hpH.setHighPass (fs, 7000.0);
+    auto add = [&] (int s0, int len, auto gen)
+    {
+        for (int i = 0; i < len && s0 + i < b.getNumSamples(); ++i) { const float v = 0.7f * gen (i, i / fs); b.addSample (0, s0 + i, v); b.addSample (1, s0 + i, v); }
+    };
+    for (int step = 0; step * 0.25 < sec - 0.5; ++step)
+    {
+        const int s0 = (int) (step * 0.25 * fs);
+        const float hv = hatG * (step % 2 == 0 ? 1.0f : 0.6f);
+        add (s0, (int) (0.08 * fs), [&] (int, double t) { return hv * (float) std::exp (-t * 60.0) * hpH.process (rnd.nextFloat() * 2 - 1); });
+        if (step % 4 == 0)
+        {
+            double ph = 0.0;
+            add (s0, (int) (0.35 * fs), [&] (int i, double t) {
+                ph += twoPi * (50.0 + 90.0 * std::exp (-t * 30.0)) / fs;
+                return kickG * (float) (std::exp (-t * 9.0) * std::sin (ph) + (i < 96 ? 0.25 * (rnd.nextFloat() * 2 - 1) : 0.0)); });
+        }
+        if (step % 4 == 2)
+            add (s0, (int) (0.25 * fs), [&] (int, double t) {
+                return snareG * (float) (0.6 * std::exp (-t * 25.0) * std::sin (twoPi * 185.0 * t) + 0.7 * std::exp (-t * 14.0) * hpS.process (rnd.nextFloat() * 2 - 1)); });
+    }
+    return b;
+}
+
 /** Прогнати сигнал через SN Listen (з таймлайном хоста). */
 static void feed (SpacenerdListenProcessor& p, Head& head, const AudioBuffer<float>& src, int start, int n)
 {
@@ -213,6 +242,30 @@ int main (int argc, char* argv[])
                    + "  (crest " + String (f.crestDb, 1) + ", pitched " + String (f.pitchedFrac, 2) + ", spread " + String (f.pitchSpread, 0)
                    + ", median " + String (f.medianHz, 0) + " Hz)");
         }
+    }
+
+    // 1b. Уся установка однією доріжкою: розпізнається і баланс усередині
+    {
+        Head head;
+        auto items = [] (const SpacenerdListenProcessor& p)
+        {
+            StringArray t;
+            for (int i = 0; i < p.verdict.numItems; ++i) t.add (String::fromUTF8 (p.verdict.items[i].title));
+            return t;
+        };
+        auto ok = listenTo (makeKit (sec, 21, 0.8f, 0.6f, 0.12f), head);
+        const auto& f = ok->features;
+        std::cout << "  kit: kick " << f.kitKickDb << " (" << f.kitKickHits << " hits), snare " << f.kitSnareDb << " (" << f.kitSnareHits
+                  << "), cymbals " << f.kitCymDb << " | advice: " << items (*ok).joinIntoString ("; ") << std::endl;
+        check (f.autoInst == mix::Drums, String ("full kit detected as ") + mix::instName (f.autoInst));
+        const auto okItems = items (*ok);
+        check (! okItems.joinIntoString ("|").contains ("buried") && ! okItems.joinIntoString ("|").contains ("over the snare"), "balanced kit: no balance complaints");
+        auto quietKick = listenTo (makeKit (sec, 22, 0.2f, 0.6f, 0.12f), head);
+        check (items (*quietKick).contains ("Kick buried in the kit"), "kick -12 dB in the kit -> 'Kick buried' (" + items (*quietKick).joinIntoString ("; ") + ")");
+        auto loudHats = listenTo (makeKit (sec, 23, 0.8f, 0.6f, 0.9f), head);
+        std::cout << "  loud hats: inst " << mix::instName (loudHats->features.autoInst) << ", kick " << loudHats->features.kitKickDb << " (" << loudHats->features.kitKickHits
+                  << "), snare " << loudHats->features.kitSnareDb << " (" << loudHats->features.kitSnareHits << "), cym " << loudHats->features.kitCymDb << std::endl;
+        check (items (*loudHats).contains ("Cymbals over the snare"), "loud hats -> 'Cymbals over the snare' (" + items (*loudHats).joinIntoString ("; ") + ")");
     }
 
     // 2. Стрій і гул

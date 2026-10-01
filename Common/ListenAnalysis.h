@@ -172,6 +172,26 @@ public:
         maxPeak = 0.0f; clips = 0;
         noise.clear();
         drops = 0; prevActive = false; prevDb = -200.0f;
+        kickHits.clear(); snareHits.clear(); cymLevel.clear();
+        std::fill (std::begin (prevBands), std::end (prevBands), 0.0f);
+    }
+
+    /** Енергія смуги [lo, hi] з урахуванням чутливості вуха на гучному прослуховуванні
+        (половина A-зважування: низ звучить тихіше, ніж показує потужність), дБ. */
+    static float weighted (const float* bands, float lo, float hi)
+    {
+        double p = 0.0;
+        for (int b = 0; b < an::kBands; ++b)
+        {
+            const double f = an::bandHz[(size_t) b];
+            if (f < lo || f > hi) continue;
+            const double f2 = f * f;
+            const double ra = 12194.0 * 12194.0 * f2 * f2
+                            / ((f2 + 20.6 * 20.6) * std::sqrt ((f2 + 107.7 * 107.7) * (f2 + 737.9 * 737.9)) * (f2 + 12194.0 * 12194.0));
+            const double aDb = 20.0 * std::log10 (ra) + 2.0;
+            p += bands[b] * std::pow (10.0, 0.5 * aDb / 10.0);
+        }
+        return (float) (10.0 * std::log10 (std::max (p, 1.0e-20)));
     }
 
     /** Повертає true, якщо кадр звучав (для оцінки фейдера). */
@@ -193,6 +213,19 @@ public:
 
         if (prevActive && db < prev - 6.0f) ++drops;
         prevActive = active;
+
+        // Удари всередині установки: різкий приріст енергії в зоні бочки або малого
+        if (active)
+        {
+            const float kNow = weighted (f.bands, 40, 120), kPrev = weighted (prevBands, 40, 120);
+            const float sNow = weighted (f.bands, 150, 5000), sPrev = weighted (prevBands, 150, 5000);
+            const bool kickOn = kNow > kPrev + 6.0f, snareOn = sNow > sPrev + 6.0f;
+            if (kickOn && (! snareOn || kNow - kPrev >= sNow - sPrev)) kickHits.add (kNow);
+            else if (snareOn && kNow < sNow) snareHits.add (sNow);
+            cymLevel.add (weighted (f.bands, 6000, 16000));   // тарілки: верх у кожному кадрі
+        }
+        std::copy (std::begin (f.bands), std::end (f.bands), std::begin (prevBands));
+
         if (active)
         {
             ++activeFrames;
@@ -252,6 +285,11 @@ public:
         r.rangeDb = level.pct (0.9f, floorDb) - level.pct (0.1f, floorDb);
         r.crestDb = crest.pct (0.5f) + 120.0f;      // гістограма зсунута: значення від 0 дБ
         r.decayFrac = (float) drops / (float) activeFrames;
+        r.kitKickHits = (int32_t) kickHits.total;
+        r.kitSnareHits = (int32_t) snareHits.total;
+        if (kickHits.total > 0) r.kitKickDb = kickHits.pct (0.5f);
+        if (snareHits.total > 0) r.kitSnareDb = snareHits.pct (0.5f);
+        if (cymLevel.total > 0) r.kitCymDb = cymLevel.pct (0.8f);    // гучні моменти тарілок (хет — короткий)
         r.corr = (float) (lr / std::sqrt (std::max (l2 * r2, 1.0e-30)));
         const double mid = 0.25 * (l2 + r2 + 2 * lr), side = 0.25 * (l2 + r2 - 2 * lr);
         r.sideDb = (float) (10.0 * std::log10 (std::max (side, 1.0e-20) / std::max (mid, 1.0e-20)));
@@ -303,7 +341,12 @@ public:
         const bool noisy = r.pitchedFrac < 0.2f;
 
         int inst = Other; float conf = 0.4f;
-        if (highS > 0.3 && lowS < 0.15 && noisy)       { inst = Drums; conf = 0.7f; }   // тарілки / оверхеди
+        // Уся установка: удари і бочки, і малого, плюс тарілки
+        const bool kit = r.pitchedFrac < 0.5f && r.kitKickHits >= 8 && r.kitSnareHits >= 8
+                      && std::min (r.kitKickHits, r.kitSnareHits) * 4 >= std::max (r.kitKickHits, r.kitSnareHits)
+                      && r.kitSnareDb > r.kitKickDb - 15.0f && r.kitKickDb > r.kitSnareDb - 15.0f;   // не просто протікання з сусіднього мікрофона
+        if (kit)                                         { inst = Drums; conf = 0.7f; }
+        else if (highS > 0.3 && lowS < 0.15 && noisy)   { inst = Drums; conf = 0.7f; }   // тарілки / оверхеди
         else if (percussive && lowS > 0.5)             { inst = Kick;  conf = 0.8f; }
         else if (percussive && noisy && centroid > 150 && centroid < 3000) { inst = Snare; conf = 0.55f; }
         else if (percussive)                           { inst = Drums; conf = 0.45f; }
@@ -325,6 +368,8 @@ private:
     std::array<uint32_t, 101> tune {};
     std::array<uint32_t, 64> hzHist {};
     uint32_t tuneN = 0;
+    DbHist kickHits, snareHits, cymLevel;
+    float prevBands[an::kBands] {};
     float maxPeak = 0.0f, prevDb = -200.0f;
     int drops = 0;
     bool prevActive = false;

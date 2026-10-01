@@ -37,7 +37,7 @@ inline const char* genreLabel (int g)
 
 //==============================================================================
 /** Перевірки однієї доріжки: не потребують інших доріжок. */
-inline void trackChecks (const Features& f, std::vector<Advice>& out)
+inline void trackChecks (const Features& f, std::vector<Advice>& out, int genre = 1)
 {
     const int inst = f.inst;
     const juce::String nm = instName (inst);
@@ -113,7 +113,26 @@ inline void trackChecks (const Features& f, std::vector<Advice>& out)
                 out.push_back ({ 1, "No beater click", "The kick may disappear on small speakers: boost 2-4 kHz by 2-3 dB." });
             break;
         case Drums:
-            if (pres - mid > 6.0f)
+            if (f.kitKickHits >= 10 && f.kitSnareHits >= 10)
+            {
+                // Уся установка: баланс бочка / малий / тарілки (орієнтир залежить від жанру)
+                static constexpr float kickVsSnare[] { 0.0f, 1.0f, -1.0f, 0.0f, -1.0f };
+                const float d = f.kitKickDb - f.kitSnareDb - kickVsSnare[juce::jlimit (0, 4, genre)];
+                if (d < -4.0f)
+                    out.push_back ({ d < -8.0f ? 2 : 1, "Kick buried in the kit", "Kick hits sit ~" + dbText (d) + " under the snare for " + genreLabel (genre)
+                                     + ". Raise the kick mic, or boost 60-80 Hz by 2-3 dB on the drum bus." });
+                else if (d > 4.0f)
+                    out.push_back ({ d > 8.0f ? 2 : 1, "Snare buried in the kit", "The snare sits ~" + dbText (d) + " under the kick for " + genreLabel (genre)
+                                     + ". Raise the snare mic, or boost ~200 Hz (body) and 3-5 kHz (crack) by 2 dB." });
+                const float c = f.kitCymDb - f.kitSnareDb;
+                if (c > -6.0f)
+                    out.push_back ({ c > -2.0f ? 2 : 1, "Cymbals over the snare", "Cymbals are about as loud as the snare hits: lower the overheads 2-3 dB or cut 6-10 kHz." });
+                else if (c < -26.0f)
+                    out.push_back ({ 1, "Dull kit", "Cymbals are barely there: lift the overheads or add a 2 dB shelf above 8 kHz." });
+                if (f.crestDb > 0.0f && f.crestDb < 8.0f)
+                    out.push_back ({ 1, "Squashed kit", "Hits stick out only " + dbText (f.crestDb) + " over the rest: slower attack on the drum-bus compressor or parallel compression instead." });
+            }
+            else if (pres - mid > 6.0f)
                 out.push_back ({ 1, "Harsh cymbals", "Cymbals bite at 5-9 kHz: cut 2-3 dB at " + hzText (peakHz (B, 5000, 10000)) + "." });
             break;
         case Keys:

@@ -112,7 +112,7 @@ private:
 
         estimateFaders (ts, now);
 
-        for (auto& t : ts) trackChecks (t.f, t.adv);
+        for (auto& t : ts) trackChecks (t.f, t.adv, genre);
         std::vector<Advice> mixAdv;
         if (timelineOk) { balance (ts, genre, mixAdv); masking (ts, mixAdv); }
         tuningMatch (ts, mixAdv);

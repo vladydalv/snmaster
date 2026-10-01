@@ -43,6 +43,9 @@ struct Features
     float pitchedFrac = 0.0f;
     float medianHz = 0.0f;
     int32_t clips = 0;
+    // Уся установка на одній доріжці: рівні ударів бочки й малого та тарілок (зважено, дБ)
+    float kitKickDb = -100.0f, kitSnareDb = -100.0f, kitCymDb = -100.0f;
+    int32_t kitKickHits = 0, kitSnareHits = 0;
     float bands[an::kBands] {};    // середній спектр, коли доріжка звучить (дБ)
 };
 
@@ -64,7 +67,7 @@ inline int groupOfBand (int b) { return b <= 6 ? 0 : b <= 12 ? 1 : b <= 19 ? 2 :
 struct FrameRec { std::atomic<int64_t> idx; float p[kGroups]; int64_t ms; };
 
 static constexpr int kSlots = 32, kFrames = 1200;   // 1200 кадрів × 100 мс = 2 хв історії для оцінки фейдерів
-static constexpr uint32_t kMagic = 0x534e4d42, kVersion = 2;
+static constexpr uint32_t kMagic = 0x534e4d42, kVersion = 3;
 
 struct Slot
 {
@@ -105,7 +108,7 @@ public:
 #if JUCE_MAC
                    .getChildFile ("Application Support")
 #endif
-                   .getChildFile ("Spacenerd").getChildFile ("MixBus-v2.bin");
+                   .getChildFile ("Spacenerd").getChildFile ("MixBus-v3.bin");
     }
 
     bool open()

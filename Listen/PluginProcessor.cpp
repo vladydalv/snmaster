@@ -110,7 +110,7 @@ void SpacenerdListenProcessor::update()
     else
     {
         std::vector<mix::Advice> adv;
-        mix::trackChecks (f, adv);
+        mix::trackChecks (f, adv, bus.isOpen() ? (int) bus.layout()->h.genre.load() : 1);
         verdict = mix::makeVerdict (adv, f.valid != 0);
     }
 }
