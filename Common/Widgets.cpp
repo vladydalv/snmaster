@@ -383,7 +383,9 @@ void PresetBox::showPopup()
     menu.showMenuAsync (PopupMenu::Options().withTargetComponent (this).withMinimumWidth (getWidth()),
                         [safe] (int result)
                         {
-                            if (safe == nullptr || result <= 0) return;
+                            if (safe == nullptr) return;
+                            safe->hidePopup();          // скинути «меню відкрите» у ComboBox, інакше список більше не відкривається
+                            if (result <= 0) return;
                             safe->proc.setCurrentProgram (result - 1);
                             safe->sync();
                         });

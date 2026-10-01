@@ -114,6 +114,18 @@ int main (int argc, char* argv[])
         check (std::isfinite (out.getMagnitude (0, 0, out.getNumSamples())), "Preset '" + p.getProgramName (i) + "' runs");
     }
 
+    {
+        // Пресет з інтерфейсу (випадний список) реально застосовується
+        SpacenerdUnmaskProcessor p;
+        SpacenerdUnmaskEditor ed (p);
+        snui::PresetBox* box = nullptr;
+        std::function<void (Component&)> find = [&] (Component& c) { for (auto* ch : c.getChildren()) { if (auto* b = dynamic_cast<snui::PresetBox*> (ch)) box = b; find (*ch); } };
+        find (ed);
+        if (box != nullptr) box->setSelectedId (2, sendNotificationSync);
+        check (box != nullptr && p.getCurrentProgram() == 1 && std::abs (p.apvts.getRawParameterValue (UnmaskIDs::depth)->load() - 5.0f) < 0.01f,
+               "Preset from the editor list applies (program " + String (p.getCurrentProgram()) + ", depth " + String (p.apvts.getRawParameterValue (UnmaskIDs::depth)->load(), 1) + ")");
+    }
+
     std::cout << (failures == 0 ? "ALL PASSED" : String (failures) + " FAILED") << std::endl;
     return failures == 0 ? 0 : 1;
 }
