@@ -93,6 +93,9 @@ sn_add_plugin(SpacenerdListen Listen "Spacenerd Listen" Lstn
 sn_add_plugin(SpacenerdUnmask Unmask "Spacenerd Unmask" Unmk
     "Sidechain dynamic EQ: this track makes room only where and when the key plays" "Fx EQ Dynamics")
 
+sn_add_plugin(SpacenerdDecade Decade "Spacenerd Decade" Dcde
+    "Drums through the decades: year x room map, reorderable era rack, playback medium" "Fx Reverb Distortion")
+
 # Офлайн-тести DSP (не потрапляють у плагіни)
 option(SN_BUILD_TESTS "Build offline DSP tests" OFF)
 if(SN_BUILD_TESTS)
@@ -118,6 +121,7 @@ if(SN_BUILD_TESTS)
     sn_add_test(OctaveAudit Stomp OctaveAudit.cpp)
     sn_add_test(ListenTest Listen ListenTest.cpp)
     sn_add_test(UnmaskTest Unmask UnmaskTest.cpp)
+    sn_add_test(DecadeTest Decade DecadeTest.cpp)
     file(GLOB master_sources ${CMAKE_CURRENT_SOURCE_DIR}/Master/*.cpp)
     target_sources(ListenTest PRIVATE ${master_sources})
     target_compile_definitions(ListenTest PRIVATE SN_NO_PLUGIN_ENTRY=1)

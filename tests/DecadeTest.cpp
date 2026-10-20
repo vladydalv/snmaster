@@ -1,0 +1,205 @@
+#include <juce_audio_processors/juce_audio_processors.h>
+#include "../Decade/PluginProcessor.h"
+#include "../Decade/PluginEditor.h"
+#include <iostream>
+
+using namespace juce;
+
+static int failures = 0;
+static void check (bool ok, const String& what) { std::cout << (ok ? "[ OK ] " : "[FAIL] ") << what << std::endl; if (! ok) ++failures; }
+static constexpr double fs = 48000.0, twoPi = MathConstants<double>::twoPi;
+
+static void set (SpacenerdDecadeProcessor& p, const char* id, float v)
+{
+    auto* prm = p.apvts.getParameter (id);
+    prm->setValueNotifyingHost (prm->convertTo0to1 (v));
+}
+
+/** Барабанний луп (бочка/малий/хет, трохи різні L і R), потім тиша для хвоста. */
+static AudioBuffer<float> kit (double sec, double silence = 1.5)
+{
+    AudioBuffer<float> b (2, (int) ((sec + silence) * fs)); b.clear();
+    Random rnd (11);
+    sn::Biquad hpS, hpH; hpS.setHighPass (fs, 1000.0); hpH.setHighPass (fs, 7000.0);
+    for (int step = 0; step * 0.25 < sec - 0.3; ++step)
+    {
+        const int s0 = (int) (step * 0.25 * fs);
+        for (int i = 0; i < (int) (0.3 * fs) && s0 + i < b.getNumSamples(); ++i)
+        {
+            const double t = i / fs;
+            float l = 0.0f, r = 0.0f;
+            const float h = (i < (int) (0.08 * fs)) ? 0.08f * (float) std::exp (-t * 60.0) * hpH.process (rnd.nextFloat() * 2 - 1) : 0.0f;
+            l += h; r += 0.7f * h;
+            if (step % 4 == 0) { const float k = 0.5f * (float) (std::exp (-t * 9.0) * std::sin (twoPi * (50.0 * t + 1.5 * (1.0 - std::exp (-t * 30.0))))); l += k; r += k; }
+            if (step % 4 == 2) { const float s = 0.35f * (float) (0.6 * std::exp (-t * 25.0) * std::sin (twoPi * 185.0 * t) + 0.7 * std::exp (-t * 14.0) * hpS.process (rnd.nextFloat() * 2 - 1)); l += 0.8f * s; r += s; }
+            b.addSample (0, s0 + i, l); b.addSample (1, s0 + i, r);
+        }
+    }
+    return b;
+}
+
+static AudioBuffer<float> run (SpacenerdDecadeProcessor& p, const AudioBuffer<float>& in)
+{
+    p.setRateAndBufferSizeDetails (fs, 512);
+    p.prepareToPlay (fs, 512);
+    AudioBuffer<float> out (in);
+    MidiBuffer midi;
+    for (int pos = 0; pos < out.getNumSamples(); pos += 512)
+    {
+        AudioBuffer<float> b (out.getArrayOfWritePointers(), 2, pos, std::min (512, out.getNumSamples() - pos));
+        p.processBlock (b, midi);
+    }
+    return out;
+}
+
+static float rmsDb (const AudioBuffer<float>& b, double t0, double t1)
+{
+    const int a = (int) (t0 * fs), n = std::min (b.getNumSamples(), (int) (t1 * fs)) - a;
+    double e = 0.0;
+    for (int ch = 0; ch < 2; ++ch) { const float r = b.getRMSLevel (ch, a, n); e += r * r; }
+    return 10.0f * std::log10 ((float) (e / 2.0) + 1.0e-20f);
+}
+
+static float midDb (const AudioBuffer<float>& b)
+{
+    sn::Biquad h, l; h.setHighPass (fs, 300.0, 0.707); l.setLowPass (fs, 3000.0, 0.707);
+    double e = 0.0;
+    for (int i = 0; i < b.getNumSamples(); ++i) { const float y = l.process (h.process (b.getSample (0, i))); e += y * y; }
+    return 10.0f * std::log10 ((float) (e / b.getNumSamples()) + 1.0e-20f);
+}
+
+static float bandDb (const AudioBuffer<float>& b, double hz, bool high)
+{
+    sn::Biquad f; if (high) f.setHighPass (fs, hz, 0.707); else f.setLowPass (fs, hz, 0.707);
+    double e = 0.0;
+    for (int i = 0; i < b.getNumSamples(); ++i) { const float y = f.process (b.getSample (0, i)); e += y * y; }
+    return 10.0f * std::log10 ((float) (e / b.getNumSamples()) + 1.0e-20f);
+}
+
+int main (int argc, char* argv[])
+{
+    ScopedJuceInitialiser_GUI init;
+    const auto loop = kit (6.0);
+    const float inDb = rmsDb (loop, 0.0, 6.0);
+
+    // 1. Нейтрально (Authenticity 0, носій Stream з Amount 0) = вхід із затримкою на латентність
+    {
+        SpacenerdDecadeProcessor p;
+        set (p, DecIDs::auth, 0.0f); set (p, DecIDs::format, 6.0f); set (p, DecIDs::fmtAmount, 0.0f);
+        auto out = run (p, loop);
+        const int L = p.getLatencySamples();
+        double e = 0.0, ref = 0.0;
+        for (int i = L; i < loop.getNumSamples(); ++i) { const float d = out.getSample (0, i) - loop.getSample (0, i - L); e += d * d; ref += loop.getSample (0, i - L) * loop.getSample (0, i - L); }
+        const float nullDb = 10.0f * std::log10 ((float) (e / ref) + 1.0e-20f);
+        check (nullDb < -40.0f, "Authenticity 0 is transparent: null " + String (nullDb, 1) + " dB (latency " + String (L) + ")");
+    }
+
+    // 2. Кожен пресет: рівень у межах розумного, без вибухів
+    {
+        const auto& ps = getDecadePresets();
+        String worst;
+        float maxDev = 0.0f;
+        bool finite = true;
+        for (int i = 0; i < (int) ps.size(); ++i)
+        {
+            SpacenerdDecadeProcessor p;
+            p.setCurrentProgram (i);
+            auto out = run (p, loop);
+            for (int ch = 0; ch < 2; ++ch) finite = finite && std::isfinite (out.getMagnitude (ch, 0, out.getNumSamples()));
+            const float dev = rmsDb (out, 0.5, 6.0) - inDb;
+            if (std::abs (dev) > maxDev) { maxDev = std::abs (dev); worst = String (ps[(size_t) i].name) + " " + String (dev, 1) + " dB"; }
+        }
+        check (finite && maxDev < 9.0f, String ((int) ps.size()) + " presets run; largest level change: " + worst);
+    }
+
+    // 3. Вісь Room: хвіст після останнього удару
+    {
+        auto tailAt = [&] (float roomAxis, int type = 0)
+        {
+            SpacenerdDecadeProcessor p;
+            set (p, DecIDs::year, 1972.0f); set (p, DecIDs::room, roomAxis); set (p, DecIDs::roomType, (float) type);
+            auto out = run (p, loop);
+            return std::make_pair (rmsDb (out, 6.25, 6.6), rmsDb (out, 6.0, 6.3));
+        };
+        const auto dry = tailAt (0.0f), huge = tailAt (100.0f);
+        check (huge.first - dry.first > 15.0f, "Room axis: tail after the last hit " + String (dry.first, 1) + " dB (dry) -> " + String (huge.first, 1) + " dB (huge)");
+        const auto live = tailAt (90.0f, 2), gated = tailAt (90.0f, 6);
+        check (live.second - gated.second > 10.0f, "Gated room is cut after the hit: late tail live " + String (live.second, 1) + " vs gated " + String (gated.second, 1) + " dB");
+    }
+
+    // 4. Епоха змінює тембр і стерео
+    {
+        auto at = [&] (float yr, float& hi, float& corr)
+        {
+            SpacenerdDecadeProcessor p;
+            set (p, DecIDs::year, yr); set (p, DecIDs::room, 0.0f); set (p, DecIDs::format, 6.0f); set (p, DecIDs::fmtAmount, 0.0f);
+            auto out = run (p, loop);
+            hi = bandDb (out, 8000.0, true) - midDb (out);
+            double lr = 0, ll = 0, rr = 0;
+            for (int i = 0; i < out.getNumSamples(); ++i) { const double l = out.getSample (0, i), r = out.getSample (1, i); lr += l * r; ll += l * l; rr += r * r; }
+            corr = (float) (lr / std::sqrt (ll * rr + 1e-30));
+        };
+        float h50, c50, h12, c12;
+        at (1950.0f, h50, c50); at (2012.0f, h12, c12);
+        check (h12 - h50 > 10.0f, "1950 is darker than 2012: highs vs mids " + String (h50, 1) + " vs " + String (h12, 1) + " dB");
+        double lr = 0, ll = 0, rr = 0;
+        for (int i = 0; i < loop.getNumSamples(); ++i) { const double l = loop.getSample (0, i), r = loop.getSample (1, i); lr += l * r; ll += l * l; rr += r * r; }
+        const float cin = (float) (lr / std::sqrt (ll * rr + 1e-30));
+        check (c50 > 0.9995f && c12 < c50 - 0.0005f, "1950 is mono (corr " + String (c50, 4) + "), 2012 keeps the stereo (" + String (c12, 4) + ", input " + String (cin, 4) + ")");
+    }
+
+    // 5. Носії працюють (Acetate вузька смуга і моно)
+    {
+        SpacenerdDecadeProcessor p;
+        set (p, DecIDs::auth, 0.0f); set (p, DecIDs::format, 1.0f); set (p, DecIDs::fmtAmount, 100.0f);
+        auto out = run (p, loop);
+        const float hi = (bandDb (out, 8000.0, true) - midDb (out)) - (bandDb (loop, 8000.0, true) - midDb (loop));
+        check (hi < -15.0f, "Acetate cuts the top: " + String (hi, 1) + " dB above 8 kHz");
+        for (int f = 1; f <= 6; ++f)
+        {
+            SpacenerdDecadeProcessor q;
+            set (q, DecIDs::format, (float) f); set (q, DecIDs::fmtAmount, 100.0f); set (q, DecIDs::fmtAge, 100.0f);
+            auto o = run (q, loop);
+            check (std::isfinite (o.getMagnitude (0, 0, o.getNumSamples())) && o.getMagnitude (0, 0, o.getNumSamples()) < 4.0f,
+                   String ("Format ") + dec::formatName (f - 1) + " worn: peak " + String (sn::gainToDb (o.getMagnitude (0, 0, o.getNumSamples())), 1) + " dBFS");
+        }
+    }
+
+    // 6. Порядок модулів і стан
+    {
+        SpacenerdDecadeProcessor p;
+        p.setOrder ({ dec::ModRoom, dec::ModTone, dec::ModGrit, dec::ModFilter, dec::ModSquash, dec::ModHit });
+        set (p, DecIDs::year, 1984.0f);
+        MemoryBlock mb; p.getStateInformation (mb);
+        SpacenerdDecadeProcessor q; q.setStateInformation (mb.getData(), (int) mb.getSize());
+        check (q.getOrder()[0] == dec::ModRoom && std::abs (q.apvts.getRawParameterValue (DecIDs::year)->load() - 1984.0f) < 0.1f, "Rack order and year saved with the project");
+        auto out = run (q, loop);
+        check (std::isfinite (out.getMagnitude (0, 0, out.getNumSamples())), "Reordered rack runs");
+    }
+
+    // 7. CPU
+    {
+        SpacenerdDecadeProcessor p;
+        set (p, DecIDs::room, 80.0f); set (p, DecIDs::format, 3.0f);
+        const auto t0 = Time::getMillisecondCounterHiRes();
+        run (p, loop);
+        const double cpu = (Time::getMillisecondCounterHiRes() - t0) / (loop.getNumSamples() / fs * 1000.0) * 100.0;
+        check (cpu < 15.0, "CPU: " + String (cpu, 1) + " % of one core");
+    }
+
+    if (argc > 1)
+    {
+        SpacenerdDecadeProcessor p;
+        p.setCurrentProgram (9);
+        run (p, loop);
+        SpacenerdDecadeEditor ed (p);
+        ed.setSize (SpacenerdDecadeEditor::baseW, SpacenerdDecadeEditor::baseH);
+        for (int i = 0; i < 10; ++i) ed.refresh();
+        auto img = ed.createComponentSnapshot (ed.getLocalBounds(), true, 1.5f);
+        FileOutputStream os (File (argv[1]).getChildFile ("decade.png")); os.setPosition (0); os.truncate();
+        PNGImageFormat().writeImageToStream (img, os);
+    }
+
+    std::cout << (failures == 0 ? "ALL PASSED" : String (failures) + " FAILED") << std::endl;
+    return failures == 0 ? 0 : 1;
+}
