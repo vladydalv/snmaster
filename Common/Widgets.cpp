@@ -400,19 +400,23 @@ void PresetBox::sync()
 //==============================================================================
 void setupEditorSize (AudioProcessorEditor& ed, ValueTree state, int baseW, int baseH)
 {
+    // Екран, де зараз курсор (там відкриється вікно); якщо дані екрана ще недоступні — звичайний розмір
     float fit = 1.0f;
-    if (auto* d = Desktop::getInstance().getDisplays().getPrimaryDisplay())
-    {
-        const auto area = d->userArea;
-        fit = std::min (((float) area.getHeight() - 150.0f) / (float) baseH, ((float) area.getWidth() - 60.0f) / (float) baseW);
-    }
-    fit = std::max (0.5f, fit);
+    const auto& displays = Desktop::getInstance().getDisplays();
+    const auto* d = displays.getDisplayForPoint (Desktop::getMousePosition());
+    if (d == nullptr) d = displays.getPrimaryDisplay();
+    if (d != nullptr && d->userArea.getHeight() > 400 && d->userArea.getWidth() > 600)
+        fit = std::min (((float) d->userArea.getHeight() - 130.0f) / (float) baseH, ((float) d->userArea.getWidth() - 60.0f) / (float) baseW);
+    fit = jlimit (0.6f, 2.0f, fit);
+
     ed.setResizable (true, true);
     ed.setResizeLimits (baseW / 2, baseH / 2, roundToInt ((float) baseW * std::max (1.0f, fit)), roundToInt ((float) baseH * std::max (1.0f, fit)));
     if (auto* c = ed.getConstrainer())
         c->setFixedAspectRatio ((double) baseW / (double) baseH);
+
+    // Збережений розмір (якщо користувач його змінював); інакше — якомога більше, але не більше 100 % і не вище екрана
     float s = (float) state.getProperty ("uiScale", 0.0f);
-    if (s <= 0.0f) s = std::min (1.0f, fit);        // перший раз: не більше екрана
+    if (s < 0.55f) s = std::min (1.0f, fit);        // < 0.55 — слід старої помилки (вікно відкривалось на 50 %)
     s = jlimit (0.5f, fit, s);
     ed.setSize (roundToInt ((float) baseW * s), roundToInt ((float) baseH * s));
 }
