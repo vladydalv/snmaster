@@ -101,6 +101,7 @@ dec::Resolved SpacenerdDecadeProcessor::resolve (float yr, float roomAxis) const
     const float ax = juce::jlimit (0.0f, 1.0f, roomAxis * 0.01f);
     const float rEff = e.roomFloor + (1.0f - e.roomFloor) * ax;
     r.space = sp2;
+    r.roomType = rt > 0 ? rt - 1 : e.roomType;
     r.space.size = lerpF (0.35f, sp2.size, rEff) * std::exp2 (0.8f * p (roomSize) * 0.01f);
     r.space.decay = lerpF (0.25f, sp2.decay, rEff) * std::exp2 (1.2f * p (roomDecay) * 0.01f);
     r.roomWet = rEff < 0.01f ? 0.0f : a * sn::dbToGain (lerpF (-34.0f, -5.0f, std::pow (rEff, 0.7f)));

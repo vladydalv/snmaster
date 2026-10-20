@@ -2,6 +2,7 @@
 
 #include <juce_dsp/juce_dsp.h>
 #include "DecadeModel.h"
+#include "RoomEngine.h"
 #include "../Common/SNCommon.h"
 #include "../Common/Saturation.h"
 #include "../Master/MasterDSP.h"
@@ -20,6 +21,7 @@ struct Resolved
     float hitAttack = 0, hitSustain = 0;
     Space space { 0.6f, 0.5f, 0.5f, 8000, 3, 0, 0.6f };
     float roomWet = 0;          // лінійний рівень кімнати
+    int roomType = Live;
     float width = 1;
 };
 
@@ -283,138 +285,35 @@ private:
 };
 
 //==============================================================================
-/** Кімната: ранні відбиття + мережа затримок зі зворотним зв'язком (8 ліній, Хаусхолдер), гейт на хвості. */
+/** Кімната: див. RoomEngine (геометричні ранні відбиття + 16-лінійна мережа з трисмуговим згасанням + gated). */
 class RoomMod
 {
 public:
-    void prepare (double sampleRate)
-    {
-        fs = sampleRate;
-        const int maxLen = (int) (0.30 * fs);
-        for (auto& l : lines) { l.assign ((size_t) maxLen, 0.0f); }
-        pre.assign ((size_t) (0.25 * fs), 0.0f);
-        for (auto& a : ap) a.buf.assign ((size_t) (0.03 * fs), 0.0f);
-        for (auto& d : damp) d = 0.0f;
-        wpos = 0; ppos = 0; for (auto& a : ap) a.pos = 0;
-        envFast = envPeak = 0.0f; gateG = 1.0f; holdLeft = 0; lfo = 0.0;
-        sizeSm = 0.6f;
-        tailView = 0.0f;
-    }
+    void prepare (double sampleRate) { engine.prepare (sampleRate); tailView = 0.0f; idle = 0; }
 
     void process (juce::AudioBuffer<float>& buf, int numCh, const Resolved& r)
     {
         const int n = buf.getNumSamples();
-        if (r.roomWet < 1.0e-4f && tailEnergy < 1.0e-9f) { tailView = 0.0f; return; }
-        const auto& s = r.space;
-        static constexpr float baseMs[8] { 29.7f, 37.1f, 41.1f, 43.7f, 47.5f, 53.3f, 59.9f, 67.1f };
-        static constexpr float apMs[4] { 4.8f, 3.6f, 12.7f, 9.3f };
-        static constexpr float erL[10] { 7, 11, 17, 23, 31, 37, 43, 53, 61, 71 }, erR[10] { 9, 13, 19, 27, 29, 41, 47, 57, 67, 73 };
-
-        const float dampA = std::exp (-juce::MathConstants<float>::twoPi * juce::jlimit (500.0f, 18000.0f, s.dampHz) / (float) fs);
-        const float apG = 0.45f + 0.25f * s.diffusion;
-        const int preLen = juce::jlimit (1, (int) pre.size() - 1, (int) (s.predelayMs * 0.001 * fs));
-        const float holdS = 0.18f + 0.12f * s.size;
-        const float gAtk = std::exp (-1.0f / (0.001f * (float) fs)), gRel = std::exp (-1.0f / (0.04f * (float) fs));
-        const float envA = std::exp (-1.0f / (0.0005f * (float) fs)), envR = std::exp (-1.0f / (0.03f * (float) fs));
-        const float peakFall = std::exp (-1.0f / (0.5f * (float) fs));
-        const int L0 = (int) lines[0].size();
-        float energy = 0.0f;
-
-        for (int i = 0; i < n; ++i)
+        if (r.roomWet < 1.0e-4f)
         {
-            sizeSm += 0.0005f * (s.size - sizeSm);
-            const float inL = buf.getSample (0, i), inR = numCh > 1 ? buf.getSample (1, i) : inL;
-            const float mono = 0.5f * (inL + inR);
-
-            // Гейт за входом: після удару тримаємо хвіст holdS, потім швидко глушимо (класичний gated reverb)
-            const float a = std::abs (mono);
-            envFast = a > envFast ? a + envA * (envFast - a) : a + envR * (envFast - a);
-            envPeak = std::max (envFast, envPeak * peakFall);
-            if (envFast > envPeak * 0.3f && envFast > 1.0e-4f) holdLeft = (int) (holdS * fs);
-            const float gTarget = holdLeft > 0 ? 1.0f : 0.0f;
-            if (holdLeft > 0) --holdLeft;
-            gateG = gTarget > gateG ? gTarget + gAtk * (gateG - gTarget) : gTarget + gRel * (gateG - gTarget);
-            const float gate = 1.0f - s.gate * (1.0f - gateG);
-
-            // Передзатримка
-            pre[(size_t) ppos] = mono;
-            const int pr = (ppos - preLen + (int) pre.size()) % (int) pre.size();
-            float x = pre[(size_t) pr];
-            ppos = (ppos + 1) % (int) pre.size();
-
-            // Ранні відбиття (з лінії передзатримки, до дифузії)
-            float eL = 0.0f, eR = 0.0f;
-            {
-                float g = 0.8f;
-                for (int k = 0; k < 10; ++k)
-                {
-                    const int dl = std::min ((int) pre.size() - 1, preLen + (int) (erL[k] * sizeSm * 0.001f * (float) fs));
-                    const int dr = std::min ((int) pre.size() - 1, preLen + (int) (erR[k] * sizeSm * 0.001f * (float) fs));
-                    eL += g * pre[(size_t) ((ppos - 1 - dl + 2 * (int) pre.size()) % (int) pre.size())] * ((k & 1) ? -1.0f : 1.0f);
-                    eR += g * pre[(size_t) ((ppos - 1 - dr + 2 * (int) pre.size()) % (int) pre.size())] * ((k & 2) ? -1.0f : 1.0f);
-                    g *= 0.78f;
-                }
-            }
-
-            // Дифузія (4 all-pass)
-            for (int k = 0; k < 4; ++k)
-            {
-                auto& A = ap[(size_t) k];
-                const int len = std::max (1, std::min ((int) A.buf.size() - 1, (int) (apMs[k] * (0.6f + 0.4f * sizeSm) * 0.001f * (float) fs)));
-                const int rp = (A.pos - len + (int) A.buf.size()) % (int) A.buf.size();
-                const float d = A.buf[(size_t) rp];
-                const float v = x + apG * d;
-                A.buf[(size_t) A.pos] = v;
-                x = d - apG * v;
-                A.pos = (A.pos + 1) % (int) A.buf.size();
-            }
-
-            // FDN
-            lfo += 0.7 / fs; if (lfo > 1.0) lfo -= 1.0;
-            float y[8], sum = 0.0f;
-            for (int k = 0; k < 8; ++k)
-            {
-                float lenS = baseMs[k] * sizeSm * 0.001f * (float) fs;
-                if (k < 2) lenS += (float) (0.0003 * fs * std::sin (juce::MathConstants<double>::twoPi * (lfo + 0.25 * k)));
-                lenS = juce::jlimit (2.0f, (float) (L0 - 2), lenS);
-                const float rp = (float) wpos - lenS;
-                const int i0 = (int) std::floor (rp);
-                const float t = rp - (float) i0;
-                const auto& L = lines[(size_t) k];
-                const float a0 = L[(size_t) ((i0 % L0 + L0) % L0)], a1 = L[(size_t) (((i0 + 1) % L0 + L0) % L0)];
-                y[k] = a0 + t * (a1 - a0);
-                // Згасання: RT60 → коефіцієнт для цієї довжини лінії
-                const float g = std::pow (10.0f, -3.0f * lenS / (std::max (0.1f, s.decay) * (float) fs));
-                damp[(size_t) k] = y[k] + dampA * (damp[(size_t) k] - y[k]);
-                y[k] = g * damp[(size_t) k];
-                sum += y[k];
-            }
-            const float h = 2.0f / 8.0f * sum;
-            for (int k = 0; k < 8; ++k)
-                lines[(size_t) k][(size_t) wpos] = (y[k] - h) + x * ((k & 1) ? -0.35f : 0.35f);
-            wpos = (wpos + 1) % L0;
-
-            const float tl = y[0] - y[2] + y[4] - y[6], tr = y[1] - y[3] + y[5] - y[7];
-            const float wetL = (s.er * eL * 0.5f + 0.6f * tl) * gate, wetR = (s.er * eR * 0.5f + 0.6f * tr) * gate;
-            energy += wetL * wetL + wetR * wetR;
-            buf.setSample (0, i, inL + r.roomWet * wetL);
-            if (numCh > 1) buf.setSample (1, i, inR + r.roomWet * wetR);
+            // Без кімнати: дати хвосту згаснути ~4 с, потім не рахувати зовсім
+            if (idle > (int) (4.0 * 48000)) { tailView = 0.0f; return; }
+            idle += n;
         }
-        tailEnergy = energy / (float) std::max (1, n);
-        tailView = r.roomWet * std::sqrt (tailEnergy);
+        else idle = 0;
+        RoomEngine::Params p;
+        p.type = r.roomType;
+        p.size = r.space.size; p.rtMid = r.space.decay; p.dampHz = r.space.dampHz; p.er = r.space.er;
+        p.predelayMs = r.space.predelayMs; p.gate = std::max (r.space.gate, r.roomType == Gated ? 1.0f : 0.0f); p.diffusion = r.space.diffusion;
+        engine.process (buf.getWritePointer (0), numCh > 1 ? buf.getWritePointer (1) : nullptr, n, p, r.roomWet);
+        tailView = engine.tail;
     }
 
     float tailView = 0.0f;
 
 private:
-    struct AP { std::vector<float> buf; int pos = 0; };
-    double fs = 48000.0, lfo = 0.0;
-    std::array<std::vector<float>, 8> lines;
-    std::array<float, 8> damp {};
-    std::vector<float> pre;
-    std::array<AP, 4> ap;
-    int wpos = 0, ppos = 0, holdLeft = 0;
-    float envFast = 0, envPeak = 0, gateG = 1, sizeSm = 0.6f, tailEnergy = 0.0f;
+    RoomEngine engine;
+    int idle = 0;
 };
 
 //==============================================================================

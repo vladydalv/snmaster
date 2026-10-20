@@ -112,6 +112,96 @@ int main (int argc, char* argv[])
         check (finite && maxDev < 9.0f, String ((int) ps.size()) + " presets run; largest level change: " + worst);
     }
 
+    // 2b. Рушій кімнати: RT60 по смугах, щільність без «металу», стерео, стабільність, gated, ранні відбиття
+    {
+        auto impulseResponse = [] (const dec::RoomEngine::Params& prm, double seconds)
+        {
+            dec::RoomEngine e; e.prepare (fs);
+            const int n = (int) (seconds * fs);
+            AudioBuffer<float> ir (2, n); ir.clear();
+            ir.setSample (0, 0, 1.0f); ir.setSample (1, 0, 1.0f);
+            for (int pos = 0; pos < n; pos += 512)
+            {
+                const int len = std::min (512, n - pos);
+                e.process (ir.getWritePointer (0, pos), ir.getWritePointer (1, pos), len, prm, 1.0f);
+            }
+            ir.setSample (0, 0, 0.0f); ir.setSample (1, 0, 0.0f);   // прибрати сухий імпульс
+            return ir;
+        };
+        auto rt60 = [] (const AudioBuffer<float>& ir, double lo, double hi)
+        {
+            sn::Biquad a, b; a.setHighPass (fs, lo, 0.707); b.setLowPass (fs, hi, 0.707);
+            std::vector<double> e2 ((size_t) ir.getNumSamples());
+            for (int i = 0; i < ir.getNumSamples(); ++i) { const float y = b.process (a.process (ir.getSample (0, i))); e2[(size_t) i] = (double) y * y; }
+            for (int i = (int) e2.size() - 2; i >= 0; --i) e2[(size_t) i] += e2[(size_t) i + 1];     // інтеграл Шредера
+            const double e0 = e2[0];
+            int t5 = -1, t25 = -1;
+            for (int i = 0; i < (int) e2.size(); ++i)
+            {
+                const double db = 10.0 * std::log10 (e2[(size_t) i] / e0 + 1e-30);
+                if (t5 < 0 && db <= -5.0) t5 = i;
+                if (t25 < 0 && db <= -25.0) { t25 = i; break; }
+            }
+            return t5 >= 0 && t25 > t5 ? 3.0 * (t25 - t5) / fs : 0.0;
+        };
+
+        dec::RoomEngine::Params live; live.type = dec::Live; live.size = 1.2f; live.rtMid = 1.4f; live.dampHz = 7000.0f; live.er = 0.7f; live.predelayMs = 12.0f;
+        const auto ir = impulseResponse (live, 4.0);
+        const double rtLo = rt60 (ir, 80, 250), rtMid = rt60 (ir, 500, 2000), rtHi = rt60 (ir, 5000, 12000);
+        check (std::abs (rtMid - 1.4) < 0.3 && rtHi < rtMid * 0.85 && rtLo > rtMid * 0.95,
+               "Room RT60 by band (target mid 1.4 s): low " + String (rtLo, 2) + ", mid " + String (rtMid, 2) + ", high " + String (rtHi, 2) + " s");
+
+        // «Метал»: у пізньому хвості не має бути сильних резонансів
+        {
+            constexpr int order = 14, size = 1 << order;
+            juce::dsp::FFT fft (order);
+            std::vector<float> buf ((size_t) size * 2, 0.0f);
+            const int start = (int) (0.25 * fs);
+            for (int i = 0; i < size; ++i) buf[(size_t) i] = ir.getSample (0, start + i) * (0.5f - 0.5f * std::cos (MathConstants<float>::twoPi * i / (size - 1)));
+            fft.performFrequencyOnlyForwardTransform (buf.data());
+            std::vector<float> band;
+            for (int k = (int) (500.0 * size / fs); k < (int) (5000.0 * size / fs); ++k) band.push_back (buf[(size_t) k]);
+            // Згладжена огинаюча (1/3 октави) проти піків: скільки піків стирчить над локальним рівнем
+            float maxOver = 0.0f;
+            for (size_t k = 8; k + 8 < band.size(); ++k)
+            {
+                double local = 0.0; for (size_t j = k - 8; j <= k + 8; ++j) local += band[j] * band[j];
+                local = std::sqrt (local / 17.0);
+                maxOver = std::max (maxOver, Decibels::gainToDecibels ((float) (band[k] / (local + 1e-12))));
+            }
+            check (maxOver < 12.0f, "Tail has no metallic ringing: strongest peak " + String (maxOver, 1) + " dB over its neighbourhood");
+        }
+        // Стерео хвоста
+        {
+            double lr = 0, ll = 0, rr = 0;
+            for (int i = (int) (0.1 * fs); i < (int) (1.0 * fs); ++i) { const double l = ir.getSample (0, i), r = ir.getSample (1, i); lr += l * r; ll += l * l; rr += r * r; }
+            const double corr = lr / std::sqrt (ll * rr + 1e-30);
+            check (std::abs (corr) < 0.3, "Tail is wide (L/R correlation " + String (corr, 2) + ")");
+        }
+        // Стабільність на довгому залі
+        {
+            dec::RoomEngine::Params hall; hall.type = dec::Hall; hall.size = 2.0f; hall.rtMid = 6.0f; hall.dampHz = 12000.0f; hall.er = 0.4f;
+            const auto h = impulseResponse (hall, 20.0);
+            const float early = h.getRMSLevel (0, (int) (0.1 * fs), (int) fs), late = h.getRMSLevel (0, (int) (18.0 * fs), (int) fs);
+            check (std::isfinite (late) && Decibels::gainToDecibels (late / early) < -60.0f,
+                   "Stable at 6 s RT: level after 18 s " + String (Decibels::gainToDecibels (late / early), 1) + " dB");
+        }
+        // Ранні відбиття: у залі перше відбиття пізніше, ніж у студії
+        {
+            auto firstReflection = [&] (int type, float size)
+            {
+                dec::RoomEngine::Params prm; prm.type = type; prm.size = size; prm.rtMid = 0.3f; prm.er = 1.0f; prm.predelayMs = 0.0f;
+                const auto r = impulseResponse (prm, 0.3);
+                // Центр ваги ранньої енергії (перші 150 мс): у великому залі відбиття приходять пізніше
+                double num = 0.0, den = 0.0;
+                for (int i = 1; i < (int) (0.15 * fs); ++i) { const double e = (double) r.getSample (0, i) * r.getSample (0, i); num += e * i; den += e; }
+                return den > 0 ? num / den / fs * 1000.0 : 0.0;
+            };
+            const double studio = firstReflection (dec::Studio, 1.0f), hall = firstReflection (dec::Hall, 1.0f);
+            check (hall > studio * 1.5, "Early reflections centre: studio " + String (studio, 1) + " ms, hall " + String (hall, 1) + " ms");
+        }
+    }
+
     // 3. Вісь Room: хвіст після останнього удару
     {
         auto tailAt = [&] (float roomAxis, int type = 0)
