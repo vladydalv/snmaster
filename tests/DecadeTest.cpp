@@ -68,6 +68,15 @@ static float midDb (const AudioBuffer<float>& b)
     return 10.0f * std::log10 ((float) (e / b.getNumSamples()) + 1.0e-20f);
 }
 
+/** Енергія вище hz крутим фільтром (8-й порядок) — щоб не мішала нижня смуга. */
+static float steepHighDb (const AudioBuffer<float>& b, double hz)
+{
+    std::array<sn::Biquad, 4> f; for (auto& x : f) x.setHighPass (fs, hz, 0.707);
+    double e = 0.0;
+    for (int i = 0; i < b.getNumSamples(); ++i) { float y = b.getSample (0, i); for (auto& x : f) y = x.process (y); e += (double) y * y; }
+    return 10.0f * std::log10 ((float) (e / b.getNumSamples()) + 1.0e-20f);
+}
+
 static float bandDb (const AudioBuffer<float>& b, double hz, bool high)
 {
     sn::Biquad f; if (high) f.setHighPass (fs, hz, 0.707); else f.setLowPass (fs, hz, 0.707);
@@ -208,6 +217,7 @@ int main (int argc, char* argv[])
         {
             SpacenerdDecadeProcessor p;
             set (p, DecIDs::year, 1972.0f); set (p, DecIDs::room, roomAxis); set (p, DecIDs::roomType, (float) type);
+            set (p, DecIDs::format, 6.0f); set (p, DecIDs::fmtAmount, 0.0f);      // без шуму носія — слухаємо лише кімнату
             auto out = run (p, loop);
             return std::make_pair (rmsDb (out, 6.25, 6.6), rmsDb (out, 6.0, 6.3));
         };
@@ -253,6 +263,89 @@ int main (int argc, char* argv[])
             check (std::isfinite (o.getMagnitude (0, 0, o.getNumSamples())) && o.getMagnitude (0, 0, o.getNumSamples()) < 4.0f,
                    String ("Format ") + dec::formatName (f - 1) + " worn: peak " + String (sn::gainToDb (o.getMagnitude (0, 0, o.getNumSamples())), 1) + " dBFS");
         }
+    }
+
+    // 5b. MP3: справжній кодек — без втрат при Amount 0, рівень зберігає, верх обрізає, пре-ехо перед ударом
+    {
+        auto through = [&] (float amount, const AudioBuffer<float>& in)
+        {
+            SpacenerdDecadeProcessor p;
+            set (p, DecIDs::auth, 0.0f); set (p, DecIDs::format, 5.0f); set (p, DecIDs::fmtAmount, amount); set (p, DecIDs::fmtAge, 0.0f);
+            auto out = run (p, in);
+            return std::make_pair (out, p.getLatencySamples());
+        };
+        const auto [clean, L] = through (0.0f, loop);
+        double e = 0.0, ref = 0.0;
+        for (int i = L; i < loop.getNumSamples(); ++i) { const float d = clean.getSample (0, i) - loop.getSample (0, i - L); e += d * d; ref += (double) loop.getSample (0, i - L) * loop.getSample (0, i - L); }
+        const float nullDb = 10.0f * std::log10 ((float) (e / ref) + 1e-20f);
+        const auto lossy = through (75.0f, loop).first;
+        const float lvl = rmsDb (lossy, 0.5, 6.0) - inDb;
+        const float hi = steepHighDb (lossy, 17500.0) - steepHighDb (loop, 17500.0);
+        check (nullDb < -90.0f && std::abs (lvl) < 1.5f && hi < -30.0f,
+               "MP3 codec: lossless at Amount 0 (null " + String (nullDb, 0) + " dB); at 75 % level " + String (lvl, 1) + " dB, above 17 kHz " + String (hi, 0) + " dB");
+        // Пре-ехо: тиша, потім удар — шум квантування з'являється ДО удару (у межах кадру)
+        AudioBuffer<float> hitBuf (2, (int) (2.0 * fs)); hitBuf.clear();
+        Random rnd (5);
+        const int at = (int) (1.0 * fs);
+        for (int i = 0; i < (int) (0.2 * fs); ++i) { const float v = 0.5f * (float) std::exp (-i / (0.03 * fs)) * (rnd.nextFloat() * 2 - 1); hitBuf.setSample (0, at + i, v); hitBuf.setSample (1, at + i, v); }
+        const auto [pre, Lp] = through (100.0f, hitBuf);
+        const float before = rmsDb (pre, (at + Lp - (int) (0.015 * fs)) / fs, (at + Lp - (int) (0.001 * fs)) / fs);
+        check (before > -70.0f, "MP3 pre-echo before the hit: " + String (before, 1) + " dB");
+    }
+
+    // 5c. Вініл і касета: фізика носія
+    {
+        auto fmtRun = [&] (int fmtChoice, float amount, float age, const AudioBuffer<float>& in)
+        {
+            SpacenerdDecadeProcessor p;
+            set (p, DecIDs::auth, 0.0f); set (p, DecIDs::format, (float) fmtChoice); set (p, DecIDs::fmtAmount, amount); set (p, DecIDs::fmtAge, age);
+            return run (p, in);
+        };
+        // Тріск: на тиші порахувати клацання, у старої платівки їх значно більше
+        AudioBuffer<float> silence (2, (int) (6.0 * fs)); silence.clear();
+        auto clicks = [&] (float age)
+        {
+            const auto o = fmtRun (2, 100.0f, age, silence);
+            int n = 0; bool inClick = false;
+            for (int i = (int) fs; i < o.getNumSamples(); ++i)
+            {
+                const bool c = std::abs (o.getSample (0, i)) > 0.01f;
+                if (c && ! inClick) ++n;
+                inClick = c;
+            }
+            return n;
+        };
+        const int fresh = clicks (10.0f), worn = clicks (90.0f);
+        check (worn > 3 * std::max (1, fresh), "Vinyl crackle grows with age: " + String (fresh) + " clicks (new) -> " + String (worn) + " (worn) in 5 s");
+
+        // Вініл: низ моно — протифазний 60 Гц слабне відносно синфазного 1 кГц у тому ж сигналі
+        AudioBuffer<float> mixSig (2, (int) (3.0 * fs));
+        for (int i = 0; i < mixSig.getNumSamples(); ++i)
+        {
+            const float lo = 0.2f * (float) std::sin (twoPi * 60.0 * i / fs), mid = 0.1f * (float) std::sin (twoPi * 1000.0 * i / fs);
+            mixSig.setSample (0, i, mid + lo); mixSig.setSample (1, i, mid - lo);
+        }
+        auto tone = [&] (const AudioBuffer<float>& b, double hz)
+        {
+            sn::Biquad f; f.setBandPass (fs, hz, 5.0);
+            double e = 0.0;
+            for (int i = (int) fs; i < b.getNumSamples(); ++i) { const float y = f.process (b.getSample (0, i)); e += (double) y * y; }
+            return 10.0f * std::log10 ((float) e + 1e-20f);
+        };
+        const auto vo = fmtRun (2, 100.0f, 0.0f, mixSig);
+        const float rel = (tone (vo, 60.0) - tone (mixSig, 60.0)) - (tone (vo, 1000.0) - tone (mixSig, 1000.0));
+        check (rel < -10.0f, "Vinyl folds the low end to mono: anti-phase 60 Hz " + String (rel, 1) + " dB relative to the mids");
+
+        // Касета: «горб» головки на ~60 Гц відносно 1 кГц
+        auto toneLvl = [&] (double hz)
+        {
+            AudioBuffer<float> t (2, (int) (3.0 * fs));
+            for (int i = 0; i < t.getNumSamples(); ++i) { const float v = 0.05f * (float) std::sin (twoPi * hz * i / fs); t.setSample (0, i, v); t.setSample (1, i, v); }
+            const auto o = fmtRun (3, 100.0f, 0.0f, t);
+            return rmsDb (o, 1.5, 3.0) - rmsDb (t, 1.5, 3.0);
+        };
+        const float bump = toneLvl (62.0) - toneLvl (1000.0);
+        check (bump > 1.0f && bump < 4.0f, "Cassette head bump: +" + String (bump, 1) + " dB at 62 Hz vs 1 kHz");
     }
 
     // 6. Порядок модулів і стан

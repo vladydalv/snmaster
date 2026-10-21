@@ -54,7 +54,11 @@ public:
         designed = {};
         designedValid = false;
         len.fill (0.0f);
-        for (int k = 0; k < N; ++k) phase[(size_t) k] = (double) k / N;
+        for (int k = 0; k < N; ++k)
+        {
+            const double ph = juce::MathConstants<double>::twoPi * k / N;
+            oscC[(size_t) k] = (float) std::cos (ph); oscS[(size_t) k] = (float) std::sin (ph);
+        }
     }
 
     /** Додає кімнату до сигналу: out = in + wet × reverb(in). */
@@ -126,9 +130,11 @@ public:
             for (int k = 0; k < N; ++k)
             {
                 len[(size_t) k] += 0.0005f * (lenTarget[(size_t) k] - len[(size_t) k]);   // зміна розміру ковзає, без клацань
-                phase[(size_t) k] += modRate[(size_t) k] / fs;
-                if (phase[(size_t) k] >= 1.0) phase[(size_t) k] -= 1.0;
-                const float d = len[(size_t) k] + modDepth * (float) std::sin (juce::MathConstants<double>::twoPi * phase[(size_t) k]);
+                // Генератор модуляції без sin(): поворот вектора (дешево, 16 ліній × кожен семпл)
+                const float oc = oscC[(size_t) k], os = oscS[(size_t) k];
+                oscC[(size_t) k] = oc * rotC[(size_t) k] - os * rotS[(size_t) k];
+                oscS[(size_t) k] = os * rotC[(size_t) k] + oc * rotS[(size_t) k];
+                const float d = len[(size_t) k] + modDepth * oscS[(size_t) k];
                 y[k] = readCubic (lines[(size_t) k], d);
                 // Трисмугове згасання: low < 250 Гц, high > 4 кГц, середина — решта
                 auto& b = bands[(size_t) k];
@@ -153,6 +159,11 @@ public:
             ppos = (ppos + 1) % P;
         }
         tail = (float) std::sqrt (energy / std::max (1, n)) * wet;
+        for (int k = 0; k < N; ++k)
+        {
+            const float m = 1.0f / std::sqrt (oscC[(size_t) k] * oscC[(size_t) k] + oscS[(size_t) k] * oscS[(size_t) k] + 1.0e-12f);
+            oscC[(size_t) k] *= m; oscS[(size_t) k] *= m;     // утримати амплітуду 1
+        }
     }
 
     float tail = 0.0f;
@@ -217,6 +228,8 @@ private:
             lenTarget[(size_t) k] = juce::jlimit (8.0f, (float) (lineLen - 8) - modDepth, (float) primesBase[k] * scale * (float) (fs / 48000.0));
             if (len[(size_t) k] <= 0.0f) len[(size_t) k] = lenTarget[(size_t) k];
             modRate[(size_t) k] = 0.11 + 0.07 * k;   // повільні, різні для кожної лінії
+            const double w = juce::MathConstants<double>::twoPi * modRate[(size_t) k] / fs;
+            rotC[(size_t) k] = (float) std::cos (w); rotS[(size_t) k] = (float) std::sin (w);
         }
 
         // RT60 по смугах → коефіцієнти на лінію: g = 10^(-3·T/RT)
@@ -326,7 +339,8 @@ private:
     std::array<std::array<AP, 2>, 2> erAp;
     std::array<Bands, N> bands;
     std::array<float, N> len {}, lenTarget {}, gLow {}, gMid {}, gHigh {}, inGain {}, outL {}, outR {};
-    std::array<double, N> modRate {}, phase {};
+    std::array<double, N> modRate {};
+    std::array<float, N> oscC {}, oscS {}, rotC {}, rotS {};
     std::array<int, kMaxEr> erDelay {};
     std::array<float, kMaxEr> erGL {}, erGR {};
     std::array<int, kMaxCloud> cloudDelay {};
