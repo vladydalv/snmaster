@@ -209,31 +209,86 @@ private:
 class FilterMod
 {
 public:
-    void prepare (double sampleRate) { fs = sampleRate; for (auto& c : f) for (auto& b : c) b.reset(); lastHp = lastLp = lastQ = -1; }
+    void prepare (double sampleRate)
+    {
+        fs = sampleRate;
+        for (auto& c : st) c = {};
+        hpS = lpS = -1.0f; qS = 0.707f;
+    }
+
     void process (juce::AudioBuffer<float>& buf, int numCh, const Resolved& r)
     {
-        const float hp = juce::jlimit (10.0f, 2000.0f, r.hpHz), lp = juce::jlimit (1000.0f, (float) (0.45 * fs), r.lpHz);
-        const float q = 0.707f + 2.3f * r.reso;
-        if (std::abs (hp - lastHp) > 0.01f * hp || std::abs (lp - lastLp) > 0.01f * lp || q != lastQ)
+        // Цілі: частоти в log-домені, згладжені (~25 мс) — без стрибків і клацань при обертанні ручки
+        const float hpT = std::log (juce::jlimit (20.0f, 2000.0f, r.hpHz));
+        const float lpT = std::log (juce::jlimit (1000.0f, 20000.0f, r.lpHz));
+        const float reso = juce::jlimit (0.0f, 1.0f, r.reso);
+        if (hpS < 0.0f) { hpS = hpT; lpS = lpT; resoS = reso; }
+        const float k = 1.0f - std::exp (-1.0f / (0.025f * (float) fs));
+        const int n = buf.getNumSamples();
+        float* x[2] { buf.getWritePointer (0), numCh > 1 ? buf.getWritePointer (1) : nullptr };
+
+        for (int i0 = 0; i0 < n; i0 += kSub)
         {
-            sn::Biquad h, l; h.setHighPass (fs, hp, q); l.setLowPass (fs, lp, q);
-            for (auto& c : f) { c[0].copyCoeffs (h); c[1].copyCoeffs (l); }
-            lastHp = hp; lastLp = lp; lastQ = q;
-        }
-        // На нейтральних межах (20 Гц / 20 кГц без резонансу) фільтр не чіпає звук зовсім (і фазу теж)
-        const bool useHp = hp > 21.0f || r.reso > 0.001f, useLp = lp < 19900.0f || r.reso > 0.001f;
-        for (int ch = 0; ch < numCh; ++ch)
-        {
-            float* x = buf.getWritePointer (ch);
-            if (useHp) for (int i = 0; i < buf.getNumSamples(); ++i) x[i] = f[(size_t) ch][0].process (x[i]);
-            if (useLp) for (int i = 0; i < buf.getNumSamples(); ++i) x[i] = f[(size_t) ch][1].process (x[i]);
+            const int len = std::min (kSub, n - i0);
+            const float kk = 1.0f - std::pow (1.0f - k, (float) len);
+            hpS += (hpT - hpS) * kk; lpS += (lpT - lpS) * kk; resoS += (reso - resoS) * kk;
+            if (std::abs (hpT - hpS) < 1.0e-4f) hpS = hpT;
+            if (std::abs (lpT - lpS) < 1.0e-4f) lpS = lpT;
+            if (std::abs (reso - resoS) < 1.0e-4f) resoS = reso;
+
+            // Нейтральні межі: на 20 Гц / 20 кГц фільтр плавно виходить із сигналу (точний нуль, без перемикань)
+            const float wHp = smooth01 ((hpS - std::log (20.0f)) / (std::log (30.0f) - std::log (20.0f)));
+            const float wLp = smooth01 ((std::log (20000.0f) - lpS) / (std::log (20000.0f) - std::log (14000.0f)));
+            if (wHp <= 0.0f && wLp <= 0.0f) { for (auto& c : st) c = {}; continue; }
+
+            // Резонанс — головним чином на зрізі верху (як у вінтажних фільтрах), трохи на низу
+            const Coef h = coef (std::exp (hpS), 0.707f + 0.6f * resoS);
+            const Coef l = coef (std::exp (lpS), 0.707f + 3.3f * resoS * resoS + 0.6f * resoS);
+            for (int ch = 0; ch < numCh; ++ch)
+            {
+                auto& s = st[(size_t) ch];
+                float* y = x[ch] + i0;
+                for (int i = 0; i < len; ++i)
+                {
+                    float v = y[i];
+                    if (wHp > 0.0f) { const float o = svf (s.h, h, v, true); v += wHp * (o - v); }
+                    if (wLp > 0.0f) { const float o = svf (s.l, l, v, false); v += wLp * (o - v); }
+                    y[i] = v;
+                }
+            }
         }
     }
 
 private:
+    static constexpr int kSub = 16;
+    struct Coef { float g, k, a1, a2, a3; };
+    struct State { float ic1 = 0, ic2 = 0; };
+    struct Ch { State h, l; };
+
+    static float smooth01 (float t) { t = juce::jlimit (0.0f, 1.0f, t); return t * t * (3.0f - 2.0f * t); }
+
+    Coef coef (float hz, float q) const
+    {
+        const float g = (float) std::tan (juce::MathConstants<double>::pi * juce::jlimit (5.0, 0.49 * fs, (double) hz) / fs);
+        const float kq = 1.0f / q;
+        const float a1 = 1.0f / (1.0f + g * (g + kq));
+        return { g, kq, a1, g * a1, g * g * a1 };
+    }
+
+    /** TPT state-variable filter (Zavalishin): стабільний при модуляції частоти щосемпла. */
+    static float svf (State& s, const Coef& c, float v0, bool high)
+    {
+        const float v3 = v0 - s.ic2;
+        const float v1 = c.a1 * s.ic1 + c.a2 * v3;
+        const float v2 = s.ic2 + c.a2 * s.ic1 + c.a3 * v3;
+        s.ic1 = 2.0f * v1 - s.ic1;
+        s.ic2 = 2.0f * v2 - s.ic2;
+        return high ? v0 - c.k * v1 - v2 : v2;
+    }
+
     double fs = 48000.0;
-    std::array<std::array<sn::Biquad, 2>, 2> f;
-    float lastHp = -1, lastLp = -1, lastQ = -1;
+    std::array<Ch, 2> st;
+    float hpS = -1.0f, lpS = -1.0f, resoS = 0.0f, qS = 0.707f;
 };
 
 //==============================================================================

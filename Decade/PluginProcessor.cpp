@@ -102,9 +102,13 @@ dec::Resolved SpacenerdDecadeProcessor::resolve (float yr, float roomAxis) const
     const float rEff = e.roomFloor + (1.0f - e.roomFloor) * ax;
     r.space = sp2;
     r.roomType = rt > 0 ? rt - 1 : e.roomType;
-    r.space.size = lerpF (0.35f, sp2.size, rEff) * std::exp2 (0.8f * p (roomSize) * 0.01f);
-    r.space.decay = lerpF (0.25f, sp2.decay, rEff) * std::exp2 (1.2f * p (roomDecay) * 0.01f);
-    r.roomWet = rEff < 0.01f ? 0.0f : a * sn::dbToGain (lerpF (-34.0f, -5.0f, std::pow (rEff, 0.7f)));
+    // Size: більша кімната — більші відстані, пізніші відбиття і довший хвіст (як у справжньому приміщенні)
+    const float sizeMul = std::exp2 (0.8f * p (roomSize) * 0.01f);
+    r.space.size = lerpF (0.35f, sp2.size, rEff) * sizeMul;
+    r.space.decay = lerpF (0.25f, sp2.decay, rEff) * std::pow (sizeMul, 0.7f) * std::exp2 (1.2f * p (roomDecay) * 0.01f);
+    r.space.predelayMs = sp2.predelayMs * sizeMul;
+    // Рівень простору (енергія кімнати відносно сухого): ~-17 дБ на 25 %, ~-12 дБ на 50 %, ~-2 дБ на 100 %
+    r.roomWet = rEff < 0.01f ? 0.0f : a * sn::dbToGain (lerpF (-16.0f, 5.5f, rEff));
 
     r.width = 1.0f - a * (1.0f - e.width);
     return r;

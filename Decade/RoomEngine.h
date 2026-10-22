@@ -107,9 +107,8 @@ public:
             float eL = 0.0f, eR = 0.0f;
             for (int k = 0; k < numEr; ++k)
             {
-                const float v = preAt (erDelay[(size_t) k]);
-                eL += erGL[(size_t) k] * v;
-                eR += erGR[(size_t) k] * v;
+                eL += erGL[(size_t) k] * preAt (erDelay[(size_t) k]);
+                eR += erGR[(size_t) k] * preAt (erDelayR[(size_t) k]);
             }
             // Щільна «хмара» для gated
             for (int k = 0; k < numCloud; ++k)
@@ -268,14 +267,15 @@ private:
         {
             if (numEr >= kMaxEr) return;
             const float dl = (img - micL).length(), dr = (img - micR).length();
-            const float dm = std::min (dl, dr);
-            const int delay = (int) ((dm - std::min (dDirL, dDirR)) / c * (float) fs);
-            if (delay <= 0 || delay >= P - 1) return;
+            const float d0 = std::min (dDirL, dDirR);
+            const int delay = (int) ((dl - d0) / c * (float) fs), delayR = (int) ((dr - d0) / c * (float) fs);
+            if (std::min (delay, delayR) <= 0 || std::max (delay, delayR) >= P - 1) return;
+            // Тверді стіни відбивають у фазі (без інверсії) — інакше низ кімнати гасить сам себе і гучність «стрибає» з розміром
             const float refl = std::pow (G.refl, (float) order);
             erDelay[(size_t) numEr] = delay;
-            // Різниця відстаней до L/R мікрофонів — і в рівні, і (спрощено) в часі через знак
-            erGL[(size_t) numEr] = refl * dDirL / dl * (order & 1 ? -1.0f : 1.0f);
-            erGR[(size_t) numEr] = refl * dDirR / dr * (order & 1 ? -1.0f : 1.0f);
+            erDelayR[(size_t) numEr] = delayR;
+            erGL[(size_t) numEr] = refl * dDirL / dl;
+            erGR[(size_t) numEr] = refl * dDirR / dr;
             ++numEr;
         };
         const float ix[] { -src.x, 2.0f * W - src.x }, iy[] { -src.y, 2.0f * Ln - src.y }, iz[] { -src.z, 2.0f * H - src.z };
@@ -288,6 +288,25 @@ private:
         // Флаттер у гаражі: повторні відбиття між паралельними стінами
         if (p.type == Garage)
             for (int k = 2; k <= 6; ++k) addImage ({ src.x + (float) k * W * (k & 1 ? -1.0f : 1.0f), src.y, src.z }, k);
+        // Енергія ранніх відбиттів не залежить від розміру (розмір міняє час, а не гучність).
+        // Рахуємо з урахуванням когерентності (близькі відбиття складаються на низу): автокореляція смуги 80 Гц–3 кГц
+        {
+            auto R = [] (float tau)
+            {
+                constexpr float f1 = 80.0f, f2 = 3000.0f, tp = juce::MathConstants<float>::twoPi;
+                if (std::abs (tau) < 1.0e-6f) return 1.0f;
+                return (std::sin (tp * f2 * tau) - std::sin (tp * f1 * tau)) / (tp * (f2 - f1) * tau);
+            };
+            double e = 0.0;
+            for (int j = 0; j < numEr; ++j)
+                for (int k = 0; k < numEr; ++k)
+                {
+                    const float tl = (float) (erDelay[(size_t) j] - erDelay[(size_t) k]) / (float) fs, tr = (float) (erDelayR[(size_t) j] - erDelayR[(size_t) k]) / (float) fs;
+                    e += 0.5 * (erGL[(size_t) j] * erGL[(size_t) k] * R (tl) + erGR[(size_t) j] * erGR[(size_t) k] * R (tr));
+                }
+            const float norm = e > 1.0e-9 ? (float) std::sqrt (0.35 / e) : 1.0f;
+            for (int k = 0; k < numEr; ++k) { erGL[(size_t) k] *= norm; erGR[(size_t) k] *= norm; }
+        }
         erLevel = 0.9f * G.er;
 
         // «Хмара» gated: рівномірні відбиття протягом утримання
@@ -307,7 +326,10 @@ private:
             }
             numCloud = count;
         }
-        lateLevel = 0.55f * G.late;
+        // Енергія хвоста FDN ∝ RT / довжина ліній: компенсуємо довжину, щоб мала кімната не була гучнішою за велику
+        float meanLen = 0.0f;
+        for (int k = 0; k < N; ++k) meanLen += lenTarget[(size_t) k] / (float) N;
+        lateLevel = 1.4f * G.late * std::sqrt (juce::jlimit (0.2f, 5.0f, meanLen / (2200.0f * (float) (fs / 48000.0))));
     }
 
     float readCubic (const std::vector<float>& b, float delay) const
@@ -341,7 +363,7 @@ private:
     std::array<float, N> len {}, lenTarget {}, gLow {}, gMid {}, gHigh {}, inGain {}, outL {}, outR {};
     std::array<double, N> modRate {};
     std::array<float, N> oscC {}, oscS {}, rotC {}, rotS {};
-    std::array<int, kMaxEr> erDelay {};
+    std::array<int, kMaxEr> erDelay {}, erDelayR {};
     std::array<float, kMaxEr> erGL {}, erGR {};
     std::array<int, kMaxCloud> cloudDelay {};
     std::array<float, kMaxCloud> cloudGL {}, cloudGR {};

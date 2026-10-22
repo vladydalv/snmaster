@@ -414,6 +414,10 @@ void DecadeContent::tick()
     const float y = proc.apvts.getRawParameterValue (year)->load();
     const auto info = String (roundToInt (y)) + String (proc.currentFormat()) + String (proc.currentRoomType()) + String (roundToInt (proc.apvts.getRawParameterValue (room)->load()));
     if (info != shownInfo) { shownInfo = info; repaint (infoArea); }
+    // CD і стрім не старіють — Age для них не має сенсу
+    const int f = proc.currentFormat();
+    const bool ages = f != dec::CD && f != dec::Stream;
+    if (fmtAgeKnob.isEnabled() != ages) { fmtAgeKnob.setEnabled (ages); fmtAgeKnob.setAlpha (ages ? 1.0f : 0.35f); }
 }
 
 void DecadeContent::paint (Graphics& g)
