@@ -96,6 +96,31 @@ sn_add_plugin(SpacenerdUnmask Unmask "Spacenerd Unmask" Unmk
 sn_add_plugin(SpacenerdDecade Decade "Spacenerd Decade" Dcde
     "Drums through the decades: year x room map, reorderable era rack, playback medium" "Fx Reverb Distortion")
 
+# Інструмент (синтезатор): MIDI-вхід, AU типу aumu
+juce_add_plugin(SpacenerdSynth
+    COMPANY_NAME             "Spacenerd"
+    BUNDLE_ID                "space.spacenerd.Synth"
+    PLUGIN_NAME              "SN Synth"
+    PRODUCT_NAME             "Spacenerd Synth"
+    DESCRIPTION              "Analog poly synth, baritone sax model, singing bowls and ambient effects"
+    PLUGIN_MANUFACTURER_CODE Spcn
+    PLUGIN_CODE              Snth
+    IS_SYNTH                 TRUE
+    NEEDS_MIDI_INPUT         TRUE
+    NEEDS_MIDI_OUTPUT        FALSE
+    IS_MIDI_EFFECT           FALSE
+    AU_MAIN_TYPE             kAudioUnitType_MusicDevice
+    VST3_CATEGORIES          Instrument Synth
+    COPY_PLUGIN_AFTER_BUILD  FALSE
+    FORMATS                  ${SN_FORMATS})
+file(GLOB synth_sources ${CMAKE_CURRENT_SOURCE_DIR}/Synth/*.cpp)
+target_sources(SpacenerdSynth PRIVATE ${synth_sources} ${SN_COMMON_SOURCES})
+target_include_directories(SpacenerdSynth PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Common)
+target_compile_definitions(SpacenerdSynth PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0)
+target_link_libraries(SpacenerdSynth
+    PRIVATE juce::juce_audio_utils juce::juce_dsp
+    PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags juce::juce_recommended_warning_flags)
+
 # Офлайн-тести DSP (не потрапляють у плагіни)
 option(SN_BUILD_TESTS "Build offline DSP tests" OFF)
 if(SN_BUILD_TESTS)
@@ -123,6 +148,7 @@ if(SN_BUILD_TESTS)
     sn_add_test(UnmaskTest Unmask UnmaskTest.cpp)
     sn_add_test(DecadeTest Decade DecadeTest.cpp)
     sn_add_test(DecadeAudit Decade DecadeAudit.cpp)
+    sn_add_test(SynthTest Synth SynthTest.cpp)
     file(GLOB master_sources ${CMAKE_CURRENT_SOURCE_DIR}/Master/*.cpp)
     target_sources(ListenTest PRIVATE ${master_sources})
     target_compile_definitions(ListenTest PRIVATE SN_NO_PLUGIN_ENTRY=1)
