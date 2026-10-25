@@ -13,6 +13,8 @@ namespace ParamIDs
     inline constexpr auto hpfFreq   = "hpfFreq";
     inline constexpr auto lowGain   = "lowGain";
     inline constexpr auto lowFreq   = "lowFreq";
+    inline constexpr auto lmGain    = "lmGain";      // низька середина (окремий широкий дзвін)
+    inline constexpr auto lmFreq    = "lmFreq";
     inline constexpr auto midGain   = "midGain";
     inline constexpr auto midFreq   = "midFreq";
     inline constexpr auto midQ      = "midQ";
@@ -72,6 +74,10 @@ namespace ParamIDs
     inline constexpr auto qPunch = "qPunch";
 }
 
+/** Форми смуг EQ (спільні для обробки й передбачення кривої аналізатора). */
+inline constexpr double kLowMidQ = 0.8;
+inline constexpr double kQuickLowHz = 110.0, kQuickLowQ = 0.6, kQuickMidHz = 1600.0, kQuickMidQ = 0.55, kQuickHighHz = 8000.0, kQuickHighQ = 0.6;
+
 /** Цілі гучності стрімінгів (інтегрована, LUFS) і стеля −1 dBTP. */
 inline const std::array<float, 4> kLoudTargets { -14.0f, -16.0f, -15.0f, -9.0f };
 
@@ -129,6 +135,8 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     layout.add (std::make_unique<F> (id (ParamIDs::hpfFreq),  "Low Cut",    range (10.0f, 300.0f, 40.0f),     10.0f,   hpfText));
     layout.add (std::make_unique<F> (id (ParamIDs::lowGain),  "Low Gain",   lin (-12.0f, 12.0f), 0.0f, dB));
     layout.add (std::make_unique<F> (id (ParamIDs::lowFreq),  "Low Freq",   range (30.0f, 500.0f, 110.0f),    100.0f,  Hz));
+    layout.add (std::make_unique<F> (id (ParamIDs::lmGain),   "Low-Mid Gain", lin (-12.0f, 12.0f), 0.0f, dB));
+    layout.add (std::make_unique<F> (id (ParamIDs::lmFreq),   "Low-Mid Freq", range (100.0f, 800.0f, 280.0f), 300.0f, Hz));
     layout.add (std::make_unique<F> (id (ParamIDs::midGain),  "Mid Gain",   lin (-12.0f, 12.0f), 0.0f, dB));
     layout.add (std::make_unique<F> (id (ParamIDs::midFreq),  "Mid Freq",   range (200.0f, 8000.0f, 1200.0f), 1000.0f, Hz));
     layout.add (std::make_unique<F> (id (ParamIDs::midQ),     "Mid Q",      range (0.3f, 4.0f, 1.0f),         0.7f,

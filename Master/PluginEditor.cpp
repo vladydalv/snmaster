@@ -204,7 +204,7 @@ MainContent::MainContent (SpacenerdMasterProcessor& p)
       matchButton (p.apvts, ParamIDs::gainMatch, "GAIN MATCH", Theme::gr),
       abButton (p.apvts, ParamIDs::refAB, "A/B REF", Theme::accent2),
       listenSel (p.apvts, ParamIDs::monitor),
-      eq    (p.apvts, "EQ",         ParamIDs::eqOn,    4),
+      eq    (p.apvts, "EQ",         ParamIDs::eqOn,    5),
       comp  (p.apvts, "COMPRESSOR", ParamIDs::compOn,  4),
       sat   (p.apvts, "SATURATION", ParamIDs::satOn,   2),
       width (p.apvts, "STEREO",     ParamIDs::widthOn, 2),
@@ -216,10 +216,12 @@ MainContent::MainContent (SpacenerdMasterProcessor& p)
 
     // Частоти над своїми підсиленнями
     eq.knob (s, ParamIDs::lowFreq,  "Low Freq").help ("corner of the low shelf");
+    eq.knob (s, ParamIDs::lmFreq,   "LM Freq").help ("centre of the low-mid bell (body, mud, boxiness: 150-600 Hz)");
     eq.knob (s, ParamIDs::midFreq,  "Mid Freq").help ("centre of the mid bell");
     eq.knob (s, ParamIDs::highFreq, "High Freq").help ("corner of the high shelf");
     eq.knob (s, ParamIDs::hpfFreq,  "Low Cut").help ("removes rumble below this frequency (Off = full range)");
     eq.knob (s, ParamIDs::lowGain,  "Low Gain",  true);
+    eq.knob (s, ParamIDs::lmGain,   "LM Gain",   true).help ("low mids: cut for less mud and boxiness, boost for more body");
     eq.knob (s, ParamIDs::midGain,  "Mid Gain",  true);
     eq.knob (s, ParamIDs::highGain, "High Gain", true);
     eq.knob (s, ParamIDs::midQ,     "Mid Q").help ("width of the mid bell: low = broad, high = narrow");
@@ -343,13 +345,13 @@ void MainContent::resized()
     mixPanel.setBounds (r.removeFromTop (SpacenerdMasterEditor::mixH));
     r.removeFromTop (gap);
 
-    const int modulesW = 280 + gap + 280 + gap + 172 + gap + 152;
+    const int modulesW = 340 + gap + 250 + gap + 172 + gap + 152;
     viewTabs.setBounds (r.getX(), r.getY(), 220, 30);
     r.removeFromTop (36);
     quick.setBounds (r.getX(), r.getY(), modulesW, r.getHeight());
 
-    eq.setBounds   (r.removeFromLeft (280)); r.removeFromLeft (gap);
-    comp.setBounds (r.removeFromLeft (280)); r.removeFromLeft (gap);
+    eq.setBounds   (r.removeFromLeft (340)); r.removeFromLeft (gap);
+    comp.setBounds (r.removeFromLeft (250)); r.removeFromLeft (gap);
 
     auto col = r.removeFromLeft (172); r.removeFromLeft (gap);
     sat.setBounds (col.removeFromTop (224));

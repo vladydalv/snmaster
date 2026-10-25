@@ -85,9 +85,9 @@ private:
     int maxBlock = 512;
 
     // EQ в оверсемплованому домені: без стискання АЧХ біля Найквіста (cramping)
-    static constexpr int kEqBands = 4;
+    static constexpr int kEqBands = 5;
     std::array<std::array<sn::Biquad, kEqBands>, 2> eq;
-    std::array<float, 8> eqCur {}, eqTarget {};
+    std::array<float, 10> eqCur {}, eqTarget {};
 
     sn::Compressor comp;
     sn::TubeStage tube;

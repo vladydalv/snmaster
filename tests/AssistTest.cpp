@@ -136,8 +136,9 @@ int main()
     const auto after = an.getReport();
     std::cout << "After Assist (match " << after.matchPercent << "%):" << std::endl;
     for (auto& v : after.verdicts) std::cout << "   - " << v.text << std::endl;
-    const float midGain = p.apvts.getRawParameterValue (ParamIDs::midGain)->load();
-    const float midFreq = p.apvts.getRawParameterValue (ParamIDs::midFreq)->load();
+    // Бруд (низька середина) тепер прибирає окремий дзвін Low-Mid
+    const float midGain = p.apvts.getRawParameterValue (ParamIDs::lmGain)->load();
+    const float midFreq = p.apvts.getRawParameterValue (ParamIDs::lmFreq)->load();
     std::cout << "   EQ mid " << midGain << " dB @ " << midFreq << " Hz, limiter gain "
               << p.apvts.getRawParameterValue (ParamIDs::limGain)->load() << " dB, mono bass "
               << p.apvts.getRawParameterValue (ParamIDs::monoBass)->load() << " Hz" << std::endl;

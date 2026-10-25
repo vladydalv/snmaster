@@ -104,7 +104,8 @@ void SpacenerdMasterProcessor::updateEq (bool force)
     eqTarget = { p (ParamIDs::hpfFreq),
                  p (ParamIDs::lowGain),  p (ParamIDs::lowFreq),
                  p (ParamIDs::midGain),  p (ParamIDs::midFreq), p (ParamIDs::midQ),
-                 p (ParamIDs::highGain), p (ParamIDs::highFreq) };
+                 p (ParamIDs::highGain), p (ParamIDs::highFreq),
+                 p (ParamIDs::lmGain), p (ParamIDs::lmFreq) };
 
     bool changed = force;
     for (size_t i = 0; i < eqCur.size(); ++i)
@@ -118,16 +119,17 @@ void SpacenerdMasterProcessor::updateEq (bool force)
     }
     if (! changed) return;
 
-    sn::Biquad hp, lo, mid, hi;
+    sn::Biquad hp, lo, lm, mid, hi;
     if (eqCur[0] >= 15.0f) hp.setHighPass (osFs, eqCur[0]); else hp.setBypass();
     lo.setLowShelf  (osFs, eqCur[2], 0.707, eqCur[1]);
+    lm.setPeak      (osFs, eqCur[9], kLowMidQ, eqCur[8]);
     mid.setPeak     (osFs, eqCur[4], eqCur[5], eqCur[3]);
     hi.setHighShelf (osFs, eqCur[7], 0.707, eqCur[6]);
 
     for (auto& chain : eq)
     {
         chain[0].copyCoeffs (hp); chain[1].copyCoeffs (lo);
-        chain[2].copyCoeffs (mid); chain[3].copyCoeffs (hi);
+        chain[2].copyCoeffs (mid); chain[3].copyCoeffs (hi); chain[4].copyCoeffs (lm);
     }
 }
 
@@ -249,9 +251,9 @@ void SpacenerdMasterProcessor::processChunk (juce::AudioBuffer<float>& buffer)
             for (int ch = 0; ch < numCh; ++ch)
             {
                 auto& t = qTone[(size_t) ch];
-                t[0].setLowShelf (fs, 110.0, 0.6, qToneSm[0]);
-                t[1].setPeak (fs, 1600.0, 0.55, qToneSm[1]);
-                t[2].setHighShelf (fs, 8000.0, 0.6, qToneSm[2]);
+                t[0].setLowShelf (fs, kQuickLowHz, kQuickLowQ, qToneSm[0]);
+                t[1].setPeak (fs, kQuickMidHz, kQuickMidQ, qToneSm[1]);
+                t[2].setHighShelf (fs, kQuickHighHz, kQuickHighQ, qToneSm[2]);
                 auto* d = buffer.getWritePointer (ch);
                 for (int i = 0; i < n; ++i) d[i] = t[2].process (t[1].process (t[0].process (d[i])));
             }

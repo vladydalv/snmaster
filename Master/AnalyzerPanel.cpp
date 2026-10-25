@@ -82,15 +82,102 @@ void AnalyzerPanel::applyAssist()
         return (float) (s / std::max (1, n));
     };
 
-    // Найбільше відхилення в середині (згладжене по 3 смугах)
-    int midBand = -1; float midDev = 0.0f;
-    for (int b = 1; b < an::kBands - 1; ++b)
+    // Quick Low / Mid / High уже діють поверх EQ — EQ підбираємо з їх урахуванням
     {
-        const float f = an::bandHz[(size_t) b];
-        if (f < 160.0f || f > 5000.0f) continue;
-        const float d = (dev[(size_t) b - 1] + dev[(size_t) b] + dev[(size_t) b + 1]) / 3.0f;
-        if (std::abs (d) > std::abs (midDev)) { midDev = d; midBand = b; }
+        auto v = [this] (const char* id) { return proc.apvts.getRawParameterValue (id)->load(); };
+        sn::Biquad ql, qm, qh;
+        ql.setLowShelf (96000.0, kQuickLowHz, kQuickLowQ, v (ParamIDs::qLow));
+        qm.setPeak (96000.0, kQuickMidHz, kQuickMidQ, v (ParamIDs::qMid));
+        qh.setHighShelf (96000.0, kQuickHighHz, kQuickHighQ, v (ParamIDs::qHigh));
+        an::Spectrum q;
+        for (int b = 0; b < an::kBands; ++b)
+        {
+            const double f = an::bandHz[(size_t) b];
+            q[(size_t) b] = (float) (ql.magnitudeDb (96000.0, f) + qm.magnitudeDb (96000.0, f) + qh.magnitudeDb (96000.0, f));
+        }
+        const auto qn = an::normalise (q);
+        for (int b = 0; b < an::kBands; ++b) dev[(size_t) b] += qn[(size_t) b];
     }
+
+    // Де найбільше відхилення (згладжене по 3 смугах) — туди ставимо дзвони низької середини й середини
+    auto worstIn = [&] (float lo, float hi, float fallback)
+    {
+        int best = -1; float bestD = 0.0f;
+        for (int b = 1; b < an::kBands - 1; ++b)
+        {
+            const float f = an::bandHz[(size_t) b];
+            if (f < lo || f > hi) continue;
+            const float d = (dev[(size_t) b - 1] + dev[(size_t) b] + dev[(size_t) b + 1]) / 3.0f;
+            if (std::abs (d) > std::abs (bestD)) { bestD = d; best = b; }
+        }
+        return std::abs (bestD) > 1.0f && best >= 0 ? an::bandHz[(size_t) best] : fallback;
+    };
+    const float lmHz = worstIn (150.0f, 600.0f, 300.0f);
+    const float midHz = worstIn (700.0f, 5000.0f, 1500.0f);
+
+    // Усі чотири смуги підбираються РАЗОМ (найменші квадрати по всій кривій 40 Гц–16 кГц):
+    // полиці й дзвони перекриваються, і окремий підбір кожної давав горб або провал на низькій середині
+    constexpr int K = 4;
+    constexpr double efs = 96000.0;
+    auto response = [&] (const std::array<float, K>& gains)
+    {
+        sn::Biquad lo, lm, mid, hi;
+        lo.setLowShelf (efs, 100.0, 0.707, gains[0]);
+        lm.setPeak (efs, lmHz, kLowMidQ, gains[1]);
+        mid.setPeak (efs, midHz, 1.0, gains[2]);
+        hi.setHighShelf (efs, 8000.0, 0.707, gains[3]);
+        an::Spectrum r;
+        for (int b = 0; b < an::kBands; ++b)
+        {
+            const double f = an::bandHz[(size_t) b];
+            r[(size_t) b] = (float) (lo.magnitudeDb (efs, f) + lm.magnitudeDb (efs, f) + mid.magnitudeDb (efs, f) + hi.magnitudeDb (efs, f));
+        }
+        return an::normalise (r);
+    };
+    auto weight = [] (float f) { return f < 40.0f || f > 16000.0f ? 0.0 : (f < 63.0f || f > 10000.0f ? 0.5 : 1.0); };
+    std::array<float, K> g {};
+    std::array<bool, K> fixed {};
+    for (int iter = 0; iter < 6; ++iter)
+    {
+        // Лінеаризація навколо поточних підсилень: стовпці = відгук на +1 дБ кожної смуги
+        const auto base = response (g);
+        std::array<an::Spectrum, K> col;
+        for (int k = 0; k < K; ++k)
+        {
+            auto gk = g; gk[(size_t) k] += 1.0f;
+            const auto rk = response (gk);
+            for (int b = 0; b < an::kBands; ++b) col[(size_t) k][(size_t) b] = rk[(size_t) b] - base[(size_t) b];
+        }
+        double A[K][K] {}, y[K] {};
+        for (int b = 0; b < an::kBands; ++b)
+        {
+            const double w = weight (an::bandHz[(size_t) b]);
+            if (w <= 0.0) continue;
+            const double resid = dev[(size_t) b] + base[(size_t) b];
+            for (int i = 0; i < K; ++i)
+            {
+                y[i] -= w * col[(size_t) i][(size_t) b] * resid;
+                for (int j = 0; j < K; ++j) A[i][j] += w * col[(size_t) i][(size_t) b] * col[(size_t) j][(size_t) b];
+            }
+        }
+        for (int i = 0; i < K; ++i) A[i][i] += 0.15;          // м'яка регуляризація: без зайвих рухів
+        for (int i = 0; i < K; ++i) if (fixed[(size_t) i]) { for (int j = 0; j < K; ++j) A[i][j] = A[j][i] = 0.0; A[i][i] = 1.0; y[i] = 0.0; }
+        // Гаусс 4×4
+        for (int c = 0; c < K; ++c)
+        {
+            int piv = c; for (int r2 = c + 1; r2 < K; ++r2) if (std::abs (A[r2][c]) > std::abs (A[piv][c])) piv = r2;
+            for (int j = 0; j < K; ++j) std::swap (A[c][j], A[piv][j]); std::swap (y[c], y[piv]);
+            for (int r2 = c + 1; r2 < K; ++r2) { const double m = A[r2][c] / A[c][c]; for (int j = c; j < K; ++j) A[r2][j] -= m * A[c][j]; y[r2] -= m * y[c]; }
+        }
+        double d[K] {};
+        for (int c = K - 1; c >= 0; --c) { double sum = y[c]; for (int j = c + 1; j < K; ++j) sum -= A[c][j] * d[j]; d[c] = sum / A[c][c]; }
+        for (int k = 0; k < K; ++k)
+        {
+            g[(size_t) k] = (float) (g[(size_t) k] + d[k]);
+            if (std::abs (g[(size_t) k]) > 6.0f) { g[(size_t) k] = jlimit (-6.0f, 6.0f, g[(size_t) k]); fixed[(size_t) k] = true; }
+        }
+    }
+    for (auto& x : g) x = std::round (x * 10.0f) / 10.0f;
 
     const float lufsIn = ta.inLufs() > -70.0f ? ta.inLufs() : -20.0f;
 
@@ -102,9 +189,7 @@ void AnalyzerPanel::applyAssist()
         prm->endChangeGesture();
     };
 
-    const float lowG  = jlimit (-6.0f, 6.0f, -avgDev (63.0f, 125.0f));
-    const float highG = jlimit (-6.0f, 6.0f, -avgDev (6300.0f, 16000.0f));
-    const float midG  = std::abs (midDev) > 1.0f ? jlimit (-6.0f, 6.0f, -0.8f * midDev) : 0.0f;
+    const float lowG = g[0], lmG = g[1], midG = g[2], highG = g[3];
     const bool cutSub = avgDev (31.5f, 50.0f) > 3.0f;
     const bool monoBass = ta.outAn.lowSideDb() > -15.0f || ta.inAn.lowSideDb() > -15.0f;
     // Gain staging: спершу виводимо вхід на робочий рівень -18 LUFS, далі компресор і лімітер від нього
@@ -117,8 +202,8 @@ void AnalyzerPanel::applyAssist()
     set (eqOn, 1.0f);
     set (hpfFreq, cutSub ? 30.0f : 10.0f);
     set (lowFreq, 100.0f);  set (lowGain, lowG);
-    if (midBand >= 0) { set (midFreq, an::bandHz[(size_t) midBand]); set (midQ, 1.0f); }
-    set (midGain, midG);
+    set (lmFreq, lmHz);     set (lmGain, lmG);
+    set (midFreq, midHz);   set (midQ, 1.0f); set (midGain, midG);
     set (highFreq, 8000.0f); set (highGain, highG);
 
     set (compOn, 1.0f); set (ratio, 2.0f); set (attack, 20.0f); set (release, 150.0f); set (knee, 6.0f);
@@ -135,7 +220,8 @@ void AnalyzerPanel::applyAssist()
     proc.resetMeters();
 
     String msg = "Assist: input " + String (inGainDb, 1) + " dB, low " + String (lowG, 1) + " dB, ";
-    if (midBand >= 0 && midG != 0.0f) msg << String (midG, 1) << " dB @ " << String (roundToInt (an::bandHz[(size_t) midBand])) << " Hz, ";
+    if (lmG != 0.0f) msg << String (lmG, 1) << " dB @ " << String (roundToInt (lmHz)) << " Hz, ";
+    if (midG != 0.0f) msg << String (midG, 1) << " dB @ " << String (roundToInt (midHz)) << " Hz, ";
     msg << "high " << String (highG, 1) << " dB, limiter +" << String (limGain, 1) << " dB → " << String (roundToInt (ta.loudTargetLufs())) << " LUFS";
     if (monoBass) msg << ", mono bass";
     assistMessage = msg;

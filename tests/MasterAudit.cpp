@@ -79,6 +79,7 @@ int main()
     {
         if (id == ParamIDs::lowFreq)                              set (p, ParamIDs::lowGain, 6.0f);
         if (id == ParamIDs::midFreq || id == ParamIDs::midQ)      set (p, ParamIDs::midGain, 6.0f);
+        if (id == ParamIDs::lmFreq)                               set (p, ParamIDs::lmGain, 6.0f);
         if (id == ParamIDs::highFreq)                             set (p, ParamIDs::highGain, 6.0f);
         if (id == ParamIDs::eqOn)                                 set (p, ParamIDs::midGain, 6.0f);
         if (id.startsWith ("sat") || id == ParamIDs::drive)       set (p, ParamIDs::satOn, id == ParamIDs::satOn ? 0.0f : 1.0f);

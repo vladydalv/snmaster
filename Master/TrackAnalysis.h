@@ -74,21 +74,34 @@ public:
     }
 
     /** АЧХ еквалайзера Master на смугах аналізатора. */
+    /** АЧХ усього тонального ланцюга: EQ (5 смуг) + Quick Low / Mid / High. */
     an::Spectrum eqResponse() const
     {
         an::Spectrum r {};
         auto v = [this] (const char* id) { return apvts.getRawParameterValue (id)->load(); };
-        if (v (ParamIDs::eqOn) < 0.5f) return r;
         constexpr double fs = 96000.0;
-        sn::Biquad hp, lo, mid, hi;
-        if (v (ParamIDs::hpfFreq) >= 15.0f) hp.setHighPass (fs, v (ParamIDs::hpfFreq)); else hp.setBypass();
-        lo.setLowShelf  (fs, v (ParamIDs::lowFreq), 0.707, v (ParamIDs::lowGain));
-        mid.setPeak     (fs, v (ParamIDs::midFreq), v (ParamIDs::midQ), v (ParamIDs::midGain));
-        hi.setHighShelf (fs, v (ParamIDs::highFreq), 0.707, v (ParamIDs::highGain));
+        std::vector<sn::Biquad> chain;
+        if (v (ParamIDs::eqOn) > 0.5f)
+        {
+            sn::Biquad hp, lo, lm, mid, hi;
+            if (v (ParamIDs::hpfFreq) >= 15.0f) hp.setHighPass (fs, v (ParamIDs::hpfFreq)); else hp.setBypass();
+            lo.setLowShelf  (fs, v (ParamIDs::lowFreq), 0.707, v (ParamIDs::lowGain));
+            lm.setPeak      (fs, v (ParamIDs::lmFreq), kLowMidQ, v (ParamIDs::lmGain));
+            mid.setPeak     (fs, v (ParamIDs::midFreq), v (ParamIDs::midQ), v (ParamIDs::midGain));
+            hi.setHighShelf (fs, v (ParamIDs::highFreq), 0.707, v (ParamIDs::highGain));
+            chain = { hp, lo, lm, mid, hi };
+        }
+        sn::Biquad ql, qm, qh;
+        ql.setLowShelf (fs, kQuickLowHz, kQuickLowQ, v (ParamIDs::qLow));
+        qm.setPeak (fs, kQuickMidHz, kQuickMidQ, v (ParamIDs::qMid));
+        qh.setHighShelf (fs, kQuickHighHz, kQuickHighQ, v (ParamIDs::qHigh));
+        chain.push_back (ql); chain.push_back (qm); chain.push_back (qh);
         for (int b = 0; b < an::kBands; ++b)
         {
             const double f = an::bandHz[(size_t) b];
-            r[(size_t) b] = (float) (hp.magnitudeDb (fs, f) + lo.magnitudeDb (fs, f) + mid.magnitudeDb (fs, f) + hi.magnitudeDb (fs, f));
+            double db = 0.0;
+            for (auto& q : chain) db += q.magnitudeDb (fs, f);
+            r[(size_t) b] = (float) db;
         }
         return r;
     }
