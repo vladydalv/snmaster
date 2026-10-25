@@ -61,7 +61,7 @@ public:
         const float key = juce::jlimit (0.7f, 2.0f, 1.0f + (f0 - 110.0f) / 400.0f);
         const float edge = 0.6f + 0.6f * p.reed;
         const float growlInc = 0.5f * f0 * 1.007f / (float) fs;
-        const float airLv = 0.004f + 0.035f * p.air;
+        const float airLv = 0.004f + 0.08f * p.air;
         const float bias = 0.12f + 0.22f * p.reed;
 
         for (int i = 0; i < len; ++i)

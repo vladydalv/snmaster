@@ -33,7 +33,7 @@ public:
             {
                 const float d = base + dep * (c == 0 ? tri : -tri);
                 float rp = (float) pos - d; if (rp < 0.0f) rp += (float) sz;
-                const int i0 = (int) rp; const float a = rp - (float) i0;
+                const int i0 = std::min ((int) rp, sz - 1); /* rp може округлитись до sz */ const float a = rp - (float) i0;
                 w[c] = buf[0][(size_t) i0] + a * (buf[0][(size_t) ((i0 + 1) % sz)] - buf[0][(size_t) i0]);
             }
             pos = (pos + 1) % sz;
@@ -74,7 +74,7 @@ public:
         {
             timeSm += (target - timeSm) * k;
             float rp = (float) pos - timeSm; if (rp < 0.0f) rp += (float) sz;
-            const int i0 = (int) rp; const float a = rp - (float) i0;
+            const int i0 = std::min ((int) rp, sz - 1); /* rp може округлитись до sz */ const float a = rp - (float) i0;
             float y[2];
             for (int c = 0; c < 2; ++c)
                 y[c] = buf[(size_t) c][(size_t) i0] + a * (buf[(size_t) c][(size_t) ((i0 + 1) % sz)] - buf[(size_t) c][(size_t) i0]);
@@ -119,7 +119,7 @@ public:
             const float p = std::fmod (ph + 0.5f * (float) h, 1.0f);
             const float d = (1.0f - p) * (float) win + 2.0f;          // затримка зменшується на 1 за семпл → швидкість читання ×2
             float rp = (float) pos - d; if (rp < 0.0f) rp += (float) sz;
-            const int i0 = (int) rp; const float a = rp - (float) i0;
+            const int i0 = std::min ((int) rp, sz - 1); /* rp може округлитись до sz */ const float a = rp - (float) i0;
             const float v = buf[(size_t) i0] + a * (buf[(size_t) ((i0 + 1) % sz)] - buf[(size_t) i0]);
             const float w = std::sin (3.14159265f * p);
             y += v * w * w;
@@ -163,7 +163,7 @@ public:
         p.gate = 0.0f;
         p.diffusion = 0.85f;
         const float inGain = freeze ? 0.0f : 1.0f;
-        const float fb = shimmer * 0.55f;
+        const float fb = shimmer * 0.58f, inject = shimmer * 0.6f;   // петля (хвіст росте вгору) + октава від самого звуку
         for (int c = 0; c < 2; ++c)
         {
             const float* x = c == 0 ? L : R;
@@ -174,7 +174,7 @@ public:
                 if (fb > 0.0f)
                 {
                     const float prev = i < lastN ? last[(size_t) c][(size_t) i] : 0.0f;
-                    s = fb * shLp[(size_t) c].process (shHp[(size_t) c].process (oct[(size_t) c].process (prev)));
+                    s = shLp[(size_t) c].process (shHp[(size_t) c].process (oct[(size_t) c].process (fb * prev + inject * x[i] * inGain)));
                 }
                 t[i] = x[i] * inGain + s;
             }

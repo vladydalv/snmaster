@@ -121,6 +121,8 @@ private:
     synui::SyncRate* rate1 = nullptr;
     synui::SyncRate* rate2 = nullptr;
     int shownEngine = -1;
+    juce::Label* saxNote = nullptr;
+    std::vector<std::pair<juce::Component*, std::function<bool()>>> relevance;   // приглушити те, що зараз не діє
     juce::Rectangle<int> sourceArea, tabArea;
 };
 

@@ -5,6 +5,7 @@
 #include "Parameters.h"
 #include "SaxModel.h"
 #include "ModalModel.h"
+#include "SampledSax.h"
 
 /** SN Synth: голоси рахуються на подвоєній частоті (2×) — осцилятори, фільтр і драйв не дають аліасингу,
     сума голосів проходить один напівсмуговий дециматор. */
@@ -138,7 +139,7 @@ struct Drive
 {
     float x1 = 0.0f, F1 = 0.0f;
     sn::Biquad lp1, lp2, hp1, hp2, tone;
-    void reset() { x1 = F1 = 0.0f; lp1.reset(); lp2.reset(); hp1.reset(); hp2.reset(); tone.reset(); }
+    void reset() { x1 = F1 = 0.0f; lastType = -1; lp1.reset(); lp2.reset(); hp1.reset(); hp2.reset(); tone.reset(); }
 
     static float logcosh (float x) noexcept { const float a = std::abs (x); return a + std::log1p (std::exp (-2.0f * a)) - 0.69314718f; }
     static constexpr float bias = 0.25f;
@@ -160,8 +161,10 @@ struct Drive
             default:    return std::abs (x) <= 1.0f ? 0.5f * x * x : std::abs (x) - 0.5f;
         }
     }
+    int lastType = -1;
     inline float shape (int t, float x) noexcept
     {
+        if (t != lastType) { lastType = t; F1 = F (t, x1); }   // первісна з правильної точки — без клацання на старті
         if (t == DRectify) x = x + 0.75f * std::abs (x) - 0.2f;     // октавний фузз: випрямлення + обмеження
         const float Fx = F (t, x);
         const float y = std::abs (x - x1) > 1.0e-4f ? (Fx - F1) / (x - x1) : f (t, 0.5f * (x + x1));
@@ -235,6 +238,7 @@ struct Global
     bool dOn = true; int dType = DWarm; float dAmount = 0.0f, dTone = 9000.0f, dLow = 20.0f, dMix = 1.0f;
     float mA = 1, mD = 300;
     int mSrc[4] {}, mDst[4] {}; float mAmt[4] {};
+    int lfoDst[2] {}; float lfoAmt[2] {};
     float glideMs = 0.0f; int mode = ModePoly;
     // Живі контролери (на блок)
     float bendSemi = 0.0f, wheel = 0.0f, at = 0.0f;
@@ -253,13 +257,13 @@ public:
     bool held = false;
     uint64_t age = 0;
 
-    void prepare (double fs2) { fs = fs2; sax.prepare (fs2); modal.prepare (fs2); driftRng.s ^= (uint32_t) reinterpret_cast<uintptr_t> (this); noiseRng.s += (uint32_t) (reinterpret_cast<uintptr_t> (this) >> 4); reset(); }
+    void prepare (double fs2) { fs = fs2; sax.prepare (fs2); ssax.prepare (fs2); modal.prepare (fs2); driftRng.s ^= (uint32_t) reinterpret_cast<uintptr_t> (this); noiseRng.s += (uint32_t) (reinterpret_cast<uintptr_t> (this) >> 4); reset(); }
     void reset()
     {
         amp.kill(); fenv.kill(); menv.kill();
         for (auto& f : flt) f.reset();
         for (auto& d : drv) d.reset();
-        sax.reset(); modal.reset();
+        sax.reset(); ssax.reset(); modal.reset();
         note = -1; held = false;
     }
     bool active() const { return amp.st != Adsr::Idle; }
@@ -283,7 +287,11 @@ public:
             amp.v = fenv.v = menv.v = 0.0f;
             if (g.engine == EngSax) sax.reset();
         }
-        if (g.engine == EngSax) sax.noteOn ((float) n, velocity, legato && ! fresh, g.sax);
+        if (g.engine == EngSax)
+        {
+            if (SaxLibrary::get().ready()) { if (fresh) ssax.reset(); ssax.noteOn (n, velocity, legato && ! fresh, g.sax, g.glideMs); }
+            else sax.noteOn ((float) n, velocity, legato && ! fresh, g.sax);
+        }
         if (g.engine == EngBowls && retrigger) { if (fresh) modal.reset(); modal.noteOn (velocity, g.bowl); }
         if (retrigger) { noteTime = 0.0f; driftStatic = rngIn.next(); }
         amp.gateOn (retrigger); fenv.gateOn (retrigger); menv.gateOn (retrigger);
@@ -295,7 +303,7 @@ public:
     {
         held = false;
         amp.gateOff(); fenv.gateOff(); menv.gateOff();
-        if (g.engine == EngSax) sax.noteOff();
+        if (g.engine == EngSax) { sax.noteOff(); ssax.noteOff (note, g.sax); }
         if (g.engine == EngBowls) modal.noteOff();
     }
 
@@ -333,6 +341,8 @@ public:
             }
             m[(size_t) g.mDst[k]] += sv * g.mAmt[k];
         }
+        for (int k = 0; k < 2; ++k)   // пряма ціль кожного LFO (без матриці)
+            if (g.lfoDst[k] != DNone && g.lfoAmt[k] != 0.0f) m[(size_t) g.lfoDst[k]] += g.lfo[k] * g.lfoAmt[k];
 
         // Дрейф (повільне «дихання» висоти й тембру, як у живого аналога) і автовібрато після атаки
         noteTime += (float) len / (float) fs;
@@ -365,7 +375,8 @@ public:
             SaxParams sp = g.sax;
             sp.breath = juce::jlimit (0.0f, 1.0f, sp.breath + m[DBreath]);
             sp.growl = juce::jlimit (0.0f, 1.0f, sp.growl + m[DGrowl]);
-            sax.render (out[0], len, basePitch, sp);
+            if (SaxLibrary::get().ready()) ssax.render (out[0], len, basePitch, sp);
+            else sax.render (out[0], len, basePitch, sp);
             std::copy_n (out[0], len, out[1]);
         }
         else renderOscs (out, len, g, basePitch, m, stereo);
@@ -523,6 +534,7 @@ private:
     std::array<VoiceFilter, 2> flt;
     std::array<Drive, 2> drv;
     SaxModel sax;
+    SampledSax ssax;
     ModalModel modal;
     Rng noiseRng, driftRng, rng;
     float noteTime = 0.0f, driftP = 0.0f, driftC = 0.0f, driftTp = 0.0f, driftTc = 0.0f, driftStatic = 0.0f;

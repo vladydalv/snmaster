@@ -21,6 +21,16 @@ jobs:
       - name: Build
         run: cmake --build build --config Release -j 4
 
+      - name: Bundle baritone sax samples into SN Synth (Karoryfer Bear Sax, royalty-free)
+        run: |
+          curl -sSL -o bearsax.zip https://github.com/sfzinstruments/karoryfer.bear-sax/releases/download/v1.002/Karoryfer.Bear_Sax.v1.002.zip
+          unzip -q bearsax.zip -d bearsax
+          python3 tools/bundle_bearsax.py bearsax/Bear_Sax bearsax_bundle
+          for B in "build/SpacenerdSynth_artefacts/Release/AU/Spacenerd Synth.component" "build/SpacenerdSynth_artefacts/Release/VST3/Spacenerd Synth.vst3"; do
+            mkdir -p "$B/Contents/Resources"
+            cp -R bearsax_bundle "$B/Contents/Resources/BearSax"
+          done
+
       - name: Ad-hoc sign and package
         run: |
           mkdir -p dist

@@ -7,6 +7,7 @@ SpacenerdSynthProcessor::SpacenerdSynthProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "STATE", createSynthLayout())
 {
+    syn::SaxLibrary::get();   // фонове завантаження семплів сакса (один раз на процес)
     prepareToPlay (48000.0, 512);
 }
 
@@ -67,6 +68,7 @@ void SpacenerdSynthProcessor::readParams()
     g.dOn = p (dOn) > 0.5f; g.dType = (int) p (dType); g.dAmount = p (dAmount) * 0.01f; g.dTone = p (dTone); g.dLow = p (dLow); g.dMix = p (dMix) * 0.01f;
     g.mA = p (mA); g.mD = p (mD);
     for (int k = 0; k < 4; ++k) { g.mSrc[k] = (int) p (mSrc[k]); g.mDst[k] = (int) p (mDst[k]); g.mAmt[k] = p (mAmt[k]) * 0.01f; }
+    g.lfoDst[0] = (int) p (l1Dst); g.lfoAmt[0] = p (l1Amt) * 0.01f; g.lfoDst[1] = (int) p (l2Dst); g.lfoAmt[1] = p (l2Amt) * 0.01f;
     g.vibAuto = p (vibAuto) * 0.01f;
     g.drift = p (drift) * 0.01f;
     g.bowl.type = (int) p (bowlType); g.bowl.decay = p (bowlDecay) * 0.01f; g.bowl.hard = p (bowlHard) * 0.01f;

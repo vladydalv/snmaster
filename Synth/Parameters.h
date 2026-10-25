@@ -26,6 +26,7 @@ namespace SynIDs
     // Модуляція
     inline constexpr auto l1Shape = "l1Shape", l1Rate = "l1Rate", l1Sync = "l1Sync", l1Div = "l1Div";
     inline constexpr auto l2Shape = "l2Shape", l2Rate = "l2Rate", l2Sync = "l2Sync", l2Div = "l2Div";
+    inline constexpr auto l1Dst = "l1Dst", l1Amt = "l1Amt", l2Dst = "l2Dst", l2Amt = "l2Amt";
     inline constexpr auto mA = "mA", mD = "mD";
     inline const char* const mSrc[4] { "m1Src", "m2Src", "m3Src", "m4Src" };
     inline const char* const mDst[4] { "m1Dst", "m2Dst", "m3Dst", "m4Dst" };
@@ -150,7 +151,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createSynthLayout()
     { NormalisableRange<float> r (20.0f, 400.0f); r.setSkewForCentre (100.0f); l.add (std::make_unique<F> (id (dLow), "Clean Low", r, 20.0f, lowKeep)); }
     l.add (std::make_unique<F> (id (dMix), "Drive Mix", NormalisableRange<float> (0.0f, 100.0f, 1.0f), 100.0f, pct));
 
-    const StringArray shapes { "Sine", "Triangle", "Saw", "Square", "S&H" };
+    const StringArray shapes { "Sine", "Tri", "Saw", "Square", "S&H" };
     for (int k = 0; k < 2; ++k)
     {
         const String n = k == 0 ? "LFO 1 " : "LFO 2 ";
@@ -158,6 +159,8 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createSynthLayout()
         l.add (std::make_unique<C> (id (k == 0 ? l1Shape : l2Shape), n + "Shape", shapes, k == 0 ? 1 : 0));
         l.add (std::make_unique<B> (id (k == 0 ? l1Sync : l2Sync), n + "Tempo Sync", false));
         l.add (std::make_unique<C> (id (k == 0 ? l1Div : l2Div), n + "Division", syn::divNames(), k == 0 ? 6 : 2));
+        l.add (std::make_unique<C> (id (k == 0 ? l1Dst : l2Dst), n + "Target", syn::dstNames(), 0));
+        l.add (std::make_unique<F> (id (k == 0 ? l1Amt : l2Amt), n + "Depth", NormalisableRange<float> (-100.0f, 100.0f, 0.1f), 0.0f, spct));
     }
     { auto [r, d] = time (0.5f, 10000.0f, 1.0f); l.add (std::make_unique<F> (id (mA), "Mod Env Attack", r, 1.0f, ms)); }
     { auto [r, d] = time (1.0f, 20000.0f, 300.0f); l.add (std::make_unique<F> (id (mD), "Mod Env Decay", r, 300.0f, ms)); }

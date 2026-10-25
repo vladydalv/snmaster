@@ -229,7 +229,7 @@ SynthContent::SynthContent (SpacenerdSynthProcessor& p)
     : proc (p), presetBox (p),
       engineSel (p.apvts, engine), modeSel (p.apvts, mode),
       oscA (p.apvts, "OSC A", {}, 4), oscB (p.apvts, "OSC B", {}, 4), mixer (p.apvts, "SUB / NOISE / FM", {}, 3),
-      sax (p.apvts, "BARITONE SAX   physical model", {}, 6), bowls (p.apvts, "BOWLS & BELLS   modal synthesis", {}, 5),
+      sax (p.apvts, "BARITONE SAX", {}, 6), bowls (p.apvts, "BOWLS & BELLS   modal synthesis", {}, 5),
       scope (p),
       filter (p.apvts, "FILTER", {}, 6), filterEnv (p.apvts, "FILTER ENVELOPE", {}, 4), drive (p.apvts, "DRIVE", dOn, 4),
       amp (p.apvts, "AMP", {}, 4), perform (p.apvts, "PLAY", {}, 3),
@@ -238,6 +238,8 @@ SynthContent::SynthContent (SpacenerdSynthProcessor& p)
       arp (p.apvts, "ARPEGGIATOR", arpOn, 4), chorus (p.apvts, "CHORUS", chOn, 3), delay (p.apvts, "DELAY", dlOn, 2), reverb (p.apvts, "REVERB", rvOn, 2)
 {
     auto& st = p.apvts;
+    auto v = [&st] (const char* id) { return st.getRawParameterValue (id)->load(); };
+    auto rule = [this] (Component& c, std::function<bool()> f) { relevance.push_back ({ &c, std::move (f) }); };
     engineSel.setTooltip ("Analog: oscillators and filter.  Sax: physical model of a baritone sax.  Bowls: singing bowls, bells, chimes");
     modeSel.setTooltip ("Poly: chords.  Mono: one note, retriggers.  Legato: one note, smooth slides between held notes");
 
@@ -246,32 +248,35 @@ SynthContent::SynthContent (SpacenerdSynthProcessor& p)
     {
         auto& s = o == 0 ? oscA : oscB;
         const bool a = o == 0;
-        s.add (std::make_unique<snui::Segmented> (st, a ? aWave : bWave), 4, 30);
-        K (s, st, a ? aOct : bOct, "Octave", nullptr);
-        K (s, st, a ? aSemi : bSemi, "Semi", nullptr, 92, true);
-        K (s, st, a ? aFine : bFine, "Fine", "detune in cents", 92, true);
-        K (s, st, a ? aLevel : bLevel, "Level", nullptr);
-        K (s, st, a ? aShape : bShape, "Shape", "saw: hollow second saw; square: pulse width; triangle: wavefold; sine: drive; supersaw: side voices");
-        K (s, st, a ? aUni : bUni, "Unison", "stacked voices for width and thickness");
-        K (s, st, a ? aDetune : bDetune, "Detune", "spread between unison voices");
-        K (s, st, a ? aSpread : bSpread, "Stereo", "how wide the unison voices are panned");
+        const char* lvId = a ? aLevel : bLevel; const char* uniId = a ? aUni : bUni; const char* wvId = a ? aWave : bWave;
+        auto heard = [v, lvId, a] { return v (lvId) > 0.05f || (! a && v (fm) > 0.05f); };
+        auto unison = [v, uniId, wvId, heard] { return heard() && (v (uniId) > 1.5f || (int) v (wvId) == syn::WSuper); };
+        rule (s.add (std::make_unique<snui::Segmented> (st, wvId), 4, 30), heard);
+        rule (K (s, st, a ? aOct : bOct, "Octave", nullptr), heard);
+        rule (K (s, st, a ? aSemi : bSemi, "Semi", nullptr, 92, true), heard);
+        rule (K (s, st, a ? aFine : bFine, "Fine", "detune in cents", 92, true), heard);
+        K (s, st, lvId, "Level", nullptr);
+        rule (K (s, st, a ? aShape : bShape, "Shape", "saw: hollow second saw; square: pulse width; triangle: wavefold; sine: drive; supersaw: side voices"), heard);
+        rule (K (s, st, uniId, "Unison", "stacked voices for width and thickness"), heard);
+        rule (K (s, st, a ? aDetune : bDetune, "Detune", "spread between unison voices (works with Unison 2+ or Super)"), unison);
+        rule (K (s, st, a ? aSpread : bSpread, "Stereo", "how wide the unison voices are panned (works with Unison 2+ or Super)"), unison);
     }
-    mixer.add (std::make_unique<snui::Segmented> (st, subOct), 3, 28);
-    mixer.add (std::make_unique<snui::Segmented> (st, subWave), 3, 28);
+    rule (mixer.add (std::make_unique<snui::Segmented> (st, subOct), 3, 28), [v] { return v (subLevel) > 0.05f; });
+    rule (mixer.add (std::make_unique<snui::Segmented> (st, subWave), 3, 28), [v] { return v (subLevel) > 0.05f; });
     K (mixer, st, subLevel, "Sub", "clean sine/square one or two octaves down: weight under the bass");
     K (mixer, st, noise, "Noise", "breath, air, snare-like attack");
     K (mixer, st, fm, "FM", "osc B modulates osc A: metallic, aggressive");
-    mixer.add (std::make_unique<snui::PillToggle> (st, bSync, "HARD SYNC  B TO A"), 3, 26);
+    rule (mixer.add (std::make_unique<snui::PillToggle> (st, bSync, "HARD SYNC  B TO A"), 3, 26), [v] { return v (bLevel) > 0.05f; });
 
     // Саксофон
     const Colour saxC = Theme::gr, bowlC = Theme::accent2;
     K (sax, st, saxBreath, "Breath", "how hard you blow: soft and airy to loud and raspy", 104, false, saxC);
-    K (sax, st, saxReed, "Reed", "soft reed: dark and breathy; hard reed: bright, edgy", 104, false, saxC);
+    K (sax, st, saxReed, "Tone", "darker, softer reed to brighter, edgier", 104, false, saxC);
     K (sax, st, saxGrowl, "Growl", "singing into the horn: rough, dirty tone", 104, false, saxC);
     K (sax, st, saxAir, "Air", "breath noise around the tone", 104, false, saxC);
     K (sax, st, saxBody, "Body", "resonance of the big baritone body", 104, false, saxC);
     K (sax, st, saxScoop, "Scoop", "pitch bends up into each note, like a player does", 104, false, saxC);
-    sax.add (note (String::fromUTF8 ("Play one note at a time (Legato). Velocity = how hard you blow. Mod wheel adds vibrato, Auto Vibrato in PLAY adds it by itself.")), 6, 40);
+    saxNote = static_cast<Label*> (&sax.add (note ({}), 6, 40));
 
     // Чаші
     bowls.add (std::make_unique<snui::Segmented> (st, bowlType), 5, 30);
@@ -291,15 +296,15 @@ SynthContent::SynthContent (SpacenerdSynthProcessor& p)
     K (filter, st, fKey, "Key", "higher notes open the filter more");
     K (filter, st, fVel, "Velocity", "harder playing opens the filter");
     filterEnv.add (std::make_unique<synui::EnvGraph> (st, fA, fD, fS, fR, Theme::accent2), 4, 60);
-    K (filterEnv, st, fA, "Attack", nullptr, 92, false, Theme::accent2);
-    K (filterEnv, st, fD, "Decay", nullptr, 92, false, Theme::accent2);
-    K (filterEnv, st, fS, "Sustain", nullptr, 92, false, Theme::accent2);
-    K (filterEnv, st, fR, "Release", nullptr, 92, false, Theme::accent2);
+    rule (K (filterEnv, st, fA, "Attack", nullptr, 92, false, Theme::accent2), [v] { return std::abs (v (fEnv)) > 0.5f; });
+    rule (K (filterEnv, st, fD, "Decay", nullptr, 92, false, Theme::accent2), [v] { return std::abs (v (fEnv)) > 0.5f; });
+    rule (K (filterEnv, st, fS, "Sustain", nullptr, 92, false, Theme::accent2), [v] { return std::abs (v (fEnv)) > 0.5f; });
+    rule (K (filterEnv, st, fR, "Release", nullptr, 92, false, Theme::accent2), [v] { return std::abs (v (fEnv)) > 0.5f; });
     drive.add (std::make_unique<snui::Segmented> (st, dType), 4, 30);
     K (drive, st, dAmount, "Amount", "warm: tube; fuzz: hard and buzzy; fold: metallic; rectify: octave fuzz", 92, false, Theme::hot);
-    K (drive, st, dTone, "Tone", "top end of the distortion", 92, false, Theme::hot);
-    K (drive, st, dLow, "Clean Low", "below this the bass stays clean: dirty but still deep and powerful", 92, false, Theme::hot);
-    K (drive, st, dMix, "Mix", nullptr, 92, false, Theme::hot);
+    rule (K (drive, st, dTone, "Tone", "top end of the distortion", 92, false, Theme::hot), [v] { return v (dAmount) > 0.05f; });
+    rule (K (drive, st, dLow, "Clean Low", "below this the bass stays clean: dirty but still deep and powerful", 92, false, Theme::hot), [v] { return v (dAmount) > 0.05f; });
+    rule (K (drive, st, dMix, "Mix", nullptr, 92, false, Theme::hot), [v] { return v (dAmount) > 0.05f; });
 
     // Підсилювач і гра
     amp.add (std::make_unique<synui::EnvGraph> (st, aA, aD, aS, aR, Theme::accent), 4, 40);
@@ -309,20 +314,24 @@ SynthContent::SynthContent (SpacenerdSynthProcessor& p)
     K (amp, st, aR, "Release", nullptr, 88);
     K (amp, st, ampVel, "Velocity", "how much playing softer makes it quieter", 88);
     K (amp, st, volume, "Volume", nullptr, 88);
-    K (perform, st, glide, "Glide", "slide between notes");
+    K (perform, st, glide, "Glide", "slide between notes (in Mono / Legato, or from the last note in Poly)");
     K (perform, st, bend, "Bend", "pitch bend range");
     K (perform, st, drift, "Drift", "slow living movement of pitch and tone, like an old analog");
-    K (perform, st, vibRate, "Vib Rate", nullptr);
+    rule (K (perform, st, vibRate, "Vib Rate", nullptr), [v] { return v (vibWheel) > 0.5f || v (vibAuto) > 0.5f || v (vibAT) > 0.5f; });
     K (perform, st, vibWheel, "Vib Wheel", "vibrato depth from the mod wheel");
     K (perform, st, vibAuto, "Auto Vib", "vibrato fades in by itself after each note starts");
 
     // Модуляція
-    lfo1.add (std::make_unique<snui::LabeledCombo> (st, l1Shape, "Shape"), 2, 46);
-    rate1 = static_cast<synui::SyncRate*> (&lfo1.add (std::make_unique<synui::SyncRate> (st, l1Rate, l1Div, l1Sync), 1, 92));
-    lfo1.add (std::make_unique<snui::PillToggle> (st, l1Sync, "SYNC"), 1, 24);
-    lfo2.add (std::make_unique<snui::LabeledCombo> (st, l2Shape, "Shape"), 2, 46);
-    rate2 = static_cast<synui::SyncRate*> (&lfo2.add (std::make_unique<synui::SyncRate> (st, l2Rate, l2Div, l2Sync), 1, 92));
-    lfo2.add (std::make_unique<snui::PillToggle> (st, l2Sync, "SYNC"), 1, 24);
+    for (int k = 0; k < 2; ++k)
+    {
+        auto& s = k == 0 ? lfo1 : lfo2;
+        s.add (std::make_unique<snui::LabeledCombo> (st, k == 0 ? l1Shape : l2Shape, "Shape"), 1, 46);
+        s.add (std::make_unique<snui::LabeledCombo> (st, k == 0 ? l1Dst : l2Dst, "Target"), 1, 46);
+        auto* r = static_cast<synui::SyncRate*> (&s.add (std::make_unique<synui::SyncRate> (st, k == 0 ? l1Rate : l2Rate, k == 0 ? l1Div : l2Div, k == 0 ? l1Sync : l2Sync), 1, 88));
+        K (s, st, k == 0 ? l1Amt : l2Amt, "Depth", "how much this LFO moves its target (more routings: MOD MATRIX)", 88, true);
+        s.add (std::make_unique<snui::PillToggle> (st, k == 0 ? l1Sync : l2Sync, "SYNC TO TEMPO"), 2, 24);
+        (k == 0 ? rate1 : rate2) = r;
+    }
     matrixCard.add (std::make_unique<synui::ModMatrix> (st), 2, 136);
     K (matrixCard, st, mA, "Env Attack", "Mod Env: a second envelope for the matrix", 80);
     K (matrixCard, st, mD, "Env Decay", nullptr, 80);
@@ -409,6 +418,20 @@ void SynthContent::tick()
     presetBox.sync();
     const int e = (int) proc.apvts.getRawParameterValue (engine)->load();
     if (e != shownEngine) layoutEngine();
+    if (saxNote != nullptr)
+    {
+        const auto t = syn::SaxLibrary::get().ready()
+            ? String ("Real 1926 Conn baritone (Karoryfer Bear Sax). Overlap notes in Legato to slide. Velocity + Breath = how hard you blow, Mod wheel = growl, Aftertouch = more breath.")
+            : String ("Sax samples not found: playing the built-in model. Overlap notes in Legato to slide, velocity = how hard you blow.");
+        if (saxNote->getText() != t) saxNote->setText (t, dontSendNotification);
+    }
+    for (auto& [c, f] : relevance)
+    {
+        const bool on = f();
+        const float base = c->getParentComponent() == &drive && proc.apvts.getRawParameterValue (dOn)->load() < 0.5f ? 0.38f : 1.0f;
+        const float a = base * (on ? 1.0f : 0.35f);
+        if (std::abs (c->getAlpha() - a) > 0.01f) c->setAlpha (a);
+    }
     if (rate1 != nullptr) rate1->update();
     if (rate2 != nullptr) rate2->update();
     scope.update();
