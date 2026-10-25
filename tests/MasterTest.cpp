@@ -502,6 +502,18 @@ int main (int argc, char* argv[])
         PNGImageFormat().writeImageToStream (img, os);
         std::cout << "Snapshot: " << f.getFullPathName() << std::endl;
 
+        // Режим Quick
+        p.apvts.state.setProperty ("quickView", true, nullptr);
+        for (auto [id, v] : { std::pair { ParamIDs::qLoud, 55.0f }, { ParamIDs::qLow, 1.5f }, { ParamIDs::qHigh, 2.0f }, { ParamIDs::qPunch, 30.0f }, { ParamIDs::qWidth, 115.0f } })
+            { auto* prm = p.apvts.getParameter (id); prm->setValueNotifyingHost (prm->convertTo0to1 (v)); }
+        for (int k = 0; k < 3; ++k) for (auto* child : e->getChildren()) if (auto* mc = dynamic_cast<MainContent*> (child)) mc->tick();
+        {
+            auto qimg = e->createComponentSnapshot (e->getLocalBounds(), true, 1.0f);
+            FileOutputStream qos (f.getSiblingFile ("quick.png")); qos.setPosition (0); qos.truncate();
+            PNGImageFormat().writeImageToStream (qimg, qos);
+        }
+        p.apvts.state.setProperty ("quickView", false, nullptr);
+
         // Альбом
         Album::dirOverride() = File::getSpecialLocation (File::tempDirectory).getChildFile ("sn_album_snap");
         Album::dirOverride().deleteRecursively();

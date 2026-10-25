@@ -102,6 +102,99 @@ void MeterPanel::resized()
 }
 
 //==============================================================================
+//==============================================================================
+QuickPanel::QuickPanel (SpacenerdMasterProcessor& p)
+    : proc (p),
+      loud  (p.apvts, ParamIDs::qLoud,  "Loudness", false, Theme::hot),
+      low   (p.apvts, ParamIDs::qLow,   "Low",  true, Theme::accent2),
+      mid   (p.apvts, ParamIDs::qMid,   "Mid",  true, Theme::accent2),
+      high  (p.apvts, ParamIDs::qHigh,  "High", true, Theme::accent2),
+      width (p.apvts, ParamIDs::qWidth, "Width", true),
+      punch (p.apvts, ParamIDs::qPunch, "Punch", false, Theme::gr)
+{
+    loud.help ("louder master: drives the true-peak limiter, the upper half also uses the soft clipper. Watch the LUFS readout against your streaming target");
+    low.help ("broad low shelf (110 Hz): weight and warmth");
+    mid.help ("broad mid bell (1.6 kHz): presence of vocals and guitars");
+    high.help ("broad high shelf (8 kHz): air and sparkle");
+    width.help ("stereo width above the bass (bass stays mono when widening)");
+    punch.help ("glue and punch: deeper bus compression with a slower attack, so drums still hit");
+    for (auto* c : std::initializer_list<Component*> { &loud, &low, &mid, &high, &width, &punch }) addAndMakeVisible (c);
+}
+
+void QuickPanel::update()
+{
+    const float l = proc.loudness.integrated.load(), t = sn::gainToDb (proc.truePeakMax.load() + 1.0e-9f);
+    if (std::abs (l - lufs) > 0.05f || std::abs (t - tp) > 0.05f) { lufs = l; tp = t; repaint (readout); }
+}
+
+void QuickPanel::resized()
+{
+    auto r = getLocalBounds().withTrimmedTop (40).reduced (16, 10);
+    auto left = r.removeFromLeft (230);
+    readout = left.removeFromBottom (58);
+    loud.setBounds (left.withSizeKeepingCentre (200, std::min (left.getHeight(), 220)));
+    r.removeFromLeft (16);
+    auto top = r.removeFromTop (r.getHeight() / 2 - 6);
+    r.removeFromTop (12);
+    const int w3 = top.getWidth() / 3;
+    low.setBounds (top.removeFromLeft (w3)); mid.setBounds (top.removeFromLeft (w3)); high.setBounds (top);
+    r.removeFromLeft (w3 / 2);
+    width.setBounds (r.removeFromLeft (w3)); punch.setBounds (r.removeFromLeft (w3));
+}
+
+void QuickPanel::paint (Graphics& g)
+{
+    snui::drawCard (g, getLocalBounds().toFloat(), "QUICK MASTER");
+    g.setColour (Theme::muted);
+    g.setFont (FontOptions (11.0f));
+    g.drawText ("big moves on top of the full chain: 0 = no change", getLocalBounds().withTrimmedTop (10).withHeight (18).reduced (16, 0), Justification::centredRight);
+
+    // Гучність проти цілі стрімінгу
+    const float target = proc.analysis.loudTargetLufs();
+    auto r = readout.toFloat();
+    g.setColour (Theme::bg.withAlpha (0.6f));
+    g.fillRoundedRectangle (r, 8.0f);
+    const bool has = lufs > -70.0f;
+    const float d = lufs - target;
+    const Colour c = ! has ? Theme::muted : std::abs (d) <= 1.0f ? Theme::good : d > 1.0f ? Theme::hot : Theme::warn;
+    g.setColour (c);
+    g.setFont (FontOptions (20.0f, Font::bold));
+    g.drawText (has ? String (lufs, 1) + " LUFS" : String ("-- LUFS"), r.removeFromTop (30.0f), Justification::centred);
+    g.setColour (Theme::muted);
+    g.setFont (FontOptions (11.0f));
+    String sub = "target " + String (roundToInt (target)) + " LUFS";
+    if (has) sub << (std::abs (d) <= 1.0f ? "  |  on target" : d > 0 ? "  |  " + String (d, 1) + " dB too loud" : "  |  " + String (-d, 1) + " dB quieter");
+    if (tp > -70.0f) sub << "  |  TP " << String (tp, 1);
+    g.drawText (sub, r, Justification::centred);
+}
+
+//==============================================================================
+ViewTabs::ViewTabs (ValueTree s, std::function<void()> cb) : state (s), onChange (std::move (cb)) { setRepaintsOnMouseActivity (true); }
+void ViewTabs::paint (Graphics& g)
+{
+    const StringArray names { "QUICK", "FULL" };
+    const float w = (float) getWidth() / 2.0f;
+    for (int i = 0; i < 2; ++i)
+    {
+        auto r = Rectangle<float> (w * (float) i, 0.0f, w, (float) getHeight()).reduced (3.0f, 2.0f);
+        const bool sel = (i == 0) == quick();
+        g.setColour (sel ? Theme::accent.withAlpha (0.2f) : Theme::card);
+        g.fillRoundedRectangle (r, 8.0f);
+        g.setColour (sel ? Theme::accent : Theme::border);
+        g.drawRoundedRectangle (r.reduced (0.5f), 8.0f, 1.0f);
+        g.setColour (sel ? Theme::text : Theme::muted);
+        g.setFont (FontOptions (11.0f, Font::bold));
+        g.drawText (names[i], r, Justification::centred);
+    }
+}
+void ViewTabs::mouseDown (const MouseEvent& e)
+{
+    state.setProperty ("quickView", e.position.x < (float) getWidth() * 0.5f, nullptr);
+    repaint();
+    if (onChange) onChange();
+}
+
+//==============================================================================
 MainContent::MainContent (SpacenerdMasterProcessor& p)
     : meters (p),
       analyzer (p),
@@ -115,7 +208,9 @@ MainContent::MainContent (SpacenerdMasterProcessor& p)
       comp  (p.apvts, "COMPRESSOR", ParamIDs::compOn,  4),
       sat   (p.apvts, "SATURATION", ParamIDs::satOn,   2),
       width (p.apvts, "STEREO",     ParamIDs::widthOn, 2),
-      lim   (p.apvts, "LIMITER",    ParamIDs::limOn,   2)
+      lim   (p.apvts, "LIMITER",    ParamIDs::limOn,   2),
+      quick (p),
+      viewTabs (p.apvts.state, [this] { showView(); })
 {
     auto& s = p.apvts;
 
@@ -168,8 +263,18 @@ MainContent::MainContent (SpacenerdMasterProcessor& p)
     proc.onReferenceChanged = [safe = Component::SafePointer<MainContent> (this)] { if (safe != nullptr) safe->updateRefButton(); };
     updateRefButton();
 
-    for (auto* c : std::initializer_list<Component*> { &presetBox, &matchButton, &abButton, &refButton, &listenSel, &analyzer, &mixPanel, &eq, &comp, &sat, &width, &lim, &meters })
+    for (auto* c : std::initializer_list<Component*> { &presetBox, &matchButton, &abButton, &refButton, &listenSel, &analyzer, &mixPanel, &eq, &comp, &sat, &width, &lim, &meters, &viewTabs })
         addAndMakeVisible (c);
+    addChildComponent (quick);
+    showView();
+}
+
+void MainContent::showView()
+{
+    const bool q = viewTabs.quick();
+    for (auto* c : std::initializer_list<Component*> { &eq, &comp, &sat, &width, &lim }) c->setVisible (! q);
+    quick.setVisible (q);
+    viewTabs.repaint();
 }
 
 void MainContent::updateRefButton()
@@ -183,6 +288,8 @@ void MainContent::updateRefButton()
 void MainContent::tick()
 {
     meters.update();
+    if (quick.isVisible()) quick.update();
+    if (quick.isVisible() != viewTabs.quick()) showView();
     analyzer.tick();
     mixPanel.tick();
     presetBox.sync();
@@ -235,6 +342,11 @@ void MainContent::resized()
     r.removeFromTop (gap);
     mixPanel.setBounds (r.removeFromTop (SpacenerdMasterEditor::mixH));
     r.removeFromTop (gap);
+
+    const int modulesW = 280 + gap + 280 + gap + 172 + gap + 152;
+    viewTabs.setBounds (r.getX(), r.getY(), 220, 30);
+    r.removeFromTop (36);
+    quick.setBounds (r.getX(), r.getY(), modulesW, r.getHeight());
 
     eq.setBounds   (r.removeFromLeft (280)); r.removeFromLeft (gap);
     comp.setBounds (r.removeFromLeft (280)); r.removeFromLeft (gap);

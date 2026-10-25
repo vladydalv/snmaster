@@ -233,6 +233,31 @@ void SpacenerdMasterProcessor::processChunk (juce::AudioBuffer<float>& buffer)
 
     for (int ch = 0; ch < numCh; ++ch)
         inPeak[(size_t) ch].push (buffer.getMagnitude (ch, 0, n));
+
+    // --- Quick Tone: три широкі «майстерингові» смуги (низ 110 Гц, середина 1.6 кГц, верх 8 кГц)
+    {
+        const std::array<float, 3> q { p (ParamIDs::qLow), p (ParamIDs::qMid), p (ParamIDs::qHigh) };
+        bool any = false;
+        for (int b = 0; b < 3; ++b)
+        {
+            qToneSm[(size_t) b] += (q[(size_t) b] - qToneSm[(size_t) b]) * std::min (1.0f, (float) n / (float) (0.04 * fs));
+            if (std::abs (q[(size_t) b] - qToneSm[(size_t) b]) < 0.01f) qToneSm[(size_t) b] = q[(size_t) b];
+            any = any || std::abs (qToneSm[(size_t) b]) > 0.001f;
+        }
+        if (any)
+        {
+            for (int ch = 0; ch < numCh; ++ch)
+            {
+                auto& t = qTone[(size_t) ch];
+                t[0].setLowShelf (fs, 110.0, 0.6, qToneSm[0]);
+                t[1].setPeak (fs, 1600.0, 0.55, qToneSm[1]);
+                t[2].setHighShelf (fs, 8000.0, 0.6, qToneSm[2]);
+                auto* d = buffer.getWritePointer (ch);
+                for (int i = 0; i < n; ++i) d[i] = t[2].process (t[1].process (t[0].process (d[i])));
+            }
+        }
+        else for (auto& t : qTone) for (auto& f : t) f.reset();
+    }
     inFifo.push (buffer.getReadPointer (0), numCh > 1 ? buffer.getReadPointer (1) : nullptr, n);
 
     // Повільно згладжені ручки (≈ 50 мс): без сходинок при автоматизації
@@ -281,12 +306,17 @@ void SpacenerdMasterProcessor::processChunk (juce::AudioBuffer<float>& buffer)
         });
 
         float gr = 0.0f;
-        runFaded (compMixF, on (ParamIDs::compOn), osData, numCh, on_, [&] (bool fresh)
+        // Quick Punch: глибше й щільніше стискання з довшою атакою — удари проходять, решта склеюється
+        const float pu = p (ParamIDs::qPunch) * 0.01f;
+        const bool compActive = on (ParamIDs::compOn) || pu > 0.001f;
+        runFaded (compMixF, compActive, osData, numCh, on_, [&] (bool fresh)
         {
             if (fresh) comp.reset();
+            const float thr = on (ParamIDs::compOn) ? p (ParamIDs::threshold) : -6.0f;
+            const float rat = on (ParamIDs::compOn) ? p (ParamIDs::ratio) : 1.5f;
             const Compressor::Settings cs {
-                p (ParamIDs::threshold), p (ParamIDs::ratio), p (ParamIDs::attack), p (ParamIDs::release),
-                p (ParamIDs::knee), p (ParamIDs::scHpf), makeupSm, compWetSm, on (ParamIDs::compAuto) };
+                thr - 10.0f * pu, std::min (10.0f, rat * (1.0f + 0.8f * pu)), p (ParamIDs::attack) + 18.0f * pu, p (ParamIDs::release),
+                p (ParamIDs::knee), p (ParamIDs::scHpf), makeupSm + 2.5f * pu, on (ParamIDs::compOn) ? compWetSm : 1.0f, on (ParamIDs::compAuto) || ! on (ParamIDs::compOn) };
             gr = comp.process (osData, numCh, on_, cs);
         });
         compGr.push (gr * compMixF);
@@ -308,14 +338,17 @@ void SpacenerdMasterProcessor::processChunk (juce::AudioBuffer<float>& buffer)
 
     // --- Ширина стерео (M/S) і моно-баси (плавне вмикання)
     {
-        const float wT = on (ParamIDs::widthOn) ? 1.0f : 0.0f;
+        const float qw = p (ParamIDs::qWidth) * 0.01f;
+        const bool widthActive = on (ParamIDs::widthOn) || std::abs (qw - 1.0f) > 0.001f;
+        const float wT = widthActive ? 1.0f : 0.0f;
         const float w0 = widthMix;
         widthMix = std::abs (wT - widthMix) < kSm ? wT : widthMix + (wT > widthMix ? kSm : -kSm);
         if (numCh == 2 && (w0 > 0.0f || wT > 0.0f))
         {
             if (w0 <= 0.0f) sideHpf.reset();
-            widthSm.setTargetValue (p (ParamIDs::width) * 0.01f);
-            const float monoHz = p (ParamIDs::monoBass);
+            widthSm.setTargetValue (juce::jlimit (0.0f, 2.0f, (on (ParamIDs::widthOn) ? p (ParamIDs::width) * 0.01f : 1.0f) * qw));
+            // Ширше — лише вище низу: бас лишається в моно (фазова сумісність, клуби, вініл, телефони)
+            const float monoHz = std::max (on (ParamIDs::widthOn) ? p (ParamIDs::monoBass) : 0.0f, qw > 1.001f ? 120.0f : 0.0f);
             const bool mono = monoHz >= 20.0f;
             if (mono) sideHpf.setCutoffFrequency (monoHz);
 
@@ -336,17 +369,21 @@ void SpacenerdMasterProcessor::processChunk (juce::AudioBuffer<float>& buffer)
     }
 
     // --- Лімітер: драйв → м'який кліпер (зрізає короткі піки, лімітеру менше роботи) → true-peak lookahead
-    const bool limActive = on (ParamIDs::limOn);
+    // Quick Loudness: більше драйву в лімітер, а у верхній половині — ще й м'який кліпер (гучно без «каші»)
+    const float ql = p (ParamIDs::qLoud) * 0.01f;
+    const bool limActive = on (ParamIDs::limOn) || ql > 0.001f;
     const float lT = limActive ? 1.0f : 0.0f, l0 = limMix;
     limMix = std::abs (lT - limMix) < kSm ? lT : limMix + (lT > limMix ? kSm : -kSm);
-    limGainSm.setTargetValue (dbToGain (limActive ? p (ParamIDs::limGain) : 0.0f));
+    limGainSm.setTargetValue (dbToGain (limActive ? (on (ParamIDs::limOn) ? p (ParamIDs::limGain) : 0.0f) + 12.0f * std::pow (ql, 0.9f) : 0.0f));
     limGainSm.applyGain (buffer, n);
+    smooth (qClipSm, std::max (0.0f, ql - 0.5f) * 0.8f);
+    const float clipNow = std::min (1.0f, (on (ParamIDs::limOn) ? clipSm : 0.0f) + qClipSm);
 
     const float ceilLin = dbToGain (ceilingSm);
-    if (clipSm > 0.001f && limMix > 0.0f)
+    if (clipNow > 0.001f && limMix > 0.0f)
     {
         // Поріг: від +3 дБ над стелею (Clip 0 %) до −2 дБ під нею (Clip 100 %)
-        const float T = ceilLin * dbToGain (3.0f - 5.0f * clipSm);
+        const float T = ceilLin * dbToGain (3.0f - 5.0f * clipNow);
         for (int ch = 0; ch < numCh; ++ch)
         {
             auto* d = buffer.getWritePointer (ch);

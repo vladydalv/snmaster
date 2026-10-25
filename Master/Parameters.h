@@ -62,6 +62,14 @@ namespace ParamIDs
 
     // М'який кліпер перед лімітером
     inline constexpr auto clip      = "clip";
+
+    // Quick: великі ручки поверх повного ланцюга (0 / 100 % = нічого не змінюють)
+    inline constexpr auto qLoud  = "qLoud";
+    inline constexpr auto qLow   = "qLow";
+    inline constexpr auto qMid   = "qMid";
+    inline constexpr auto qHigh  = "qHigh";
+    inline constexpr auto qWidth = "qWidth";
+    inline constexpr auto qPunch = "qPunch";
 }
 
 /** Цілі гучності стрімінгів (інтегрована, LUFS) і стеля −1 dBTP. */
@@ -165,6 +173,13 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
                     StringArray { "Studio", "Phone", "Earbuds", "Car", "Mono", "Stream" }, 0));
     layout.add (std::make_unique<AudioParameterChoice> (id (ParamIDs::loudTarget), "Loudness Target",
                     StringArray { "Spotify / YouTube -14", "Apple Music -16", "Deezer -15", "Loud master -9" }, 0));
+
+    layout.add (std::make_unique<F> (id (ParamIDs::qLoud),  "Quick Loudness", lin (0.0f, 100.0f, 0.1f), 0.0f, pct));
+    layout.add (std::make_unique<F> (id (ParamIDs::qLow),   "Quick Low",  lin (-6.0f, 6.0f, 0.1f), 0.0f, dB));
+    layout.add (std::make_unique<F> (id (ParamIDs::qMid),   "Quick Mid",  lin (-6.0f, 6.0f, 0.1f), 0.0f, dB));
+    layout.add (std::make_unique<F> (id (ParamIDs::qHigh),  "Quick High", lin (-6.0f, 6.0f, 0.1f), 0.0f, dB));
+    layout.add (std::make_unique<F> (id (ParamIDs::qWidth), "Quick Width", lin (0.0f, 200.0f, 0.1f), 100.0f, pct));
+    layout.add (std::make_unique<F> (id (ParamIDs::qPunch), "Quick Punch", lin (0.0f, 100.0f, 0.1f), 0.0f, pct));
 
     return layout;
 }

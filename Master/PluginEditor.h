@@ -26,6 +26,37 @@ private:
 };
 
 //==============================================================================
+/** Quick: кілька великих ручок поверх повного ланцюга (як у «майстерингу за хвилину»). */
+class QuickPanel final : public juce::Component
+{
+public:
+    explicit QuickPanel (SpacenerdMasterProcessor&);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void update();
+
+private:
+    SpacenerdMasterProcessor& proc;
+    snui::Knob loud, low, mid, high, width, punch;
+    float lufs = -100.0f, tp = -100.0f;
+    juce::Rectangle<int> readout;
+};
+
+/** Перемикач QUICK / FULL (стан зберігається в проєкті). */
+class ViewTabs final : public juce::Component
+{
+public:
+    ViewTabs (juce::ValueTree state, std::function<void()> onChange);
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    bool quick() const { return (bool) state.getProperty ("quickView", false); }
+
+private:
+    juce::ValueTree state;
+    std::function<void()> onChange;
+};
+
+//==============================================================================
 class MainContent final : public juce::Component
 {
 public:
@@ -48,6 +79,9 @@ private:
     void updateRefButton();
     float shownMatch = 0.0f;
     snui::Section eq, comp, sat, width, lim;
+    QuickPanel quick;
+    ViewTabs viewTabs;
+    void showView();
 };
 
 //==============================================================================

@@ -105,6 +105,9 @@ private:
     float eqMix = 1.0f, compMixF = 1.0f, satMixF = 0.0f, widthMix = 1.0f, limMix = 1.0f;
     float makeupSm = 0.0f, compWetSm = 1.0f, driveSm = 25.0f, satWetSm = 1.0f, ceilingSm = -1.0f, clipSm = 0.0f;
     bool firstBlock = true;
+    std::array<std::array<sn::Biquad, 3>, 2> qTone;
+    std::array<float, 3> qToneSm {};
+    float qClipSm = 0.0f;
     juce::AudioBuffer<float> osDry;
     // Кліпер (ADAA 1-го порядку): стан по каналах
     std::array<float, 2> clipPrevX {}, clipPrevF {};
